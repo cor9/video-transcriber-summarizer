@@ -134,7 +134,7 @@ def format_output(summary_text, format_type="html"):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Summary</title>
+    <title>VidScribe2AI - Video Summary</title>
     <style>
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
