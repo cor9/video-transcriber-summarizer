@@ -1,7 +1,7 @@
 import os
 import tempfile
 import time
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 import assemblyai as aai
 import anthropic
 from datetime import datetime
@@ -290,6 +290,22 @@ def format_output(summary_text, format_type="html"):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory('public', 'favicon.ico')
+
+@app.route('/sitelogo.svg')
+def sitelogo():
+    return send_from_directory('public', 'sitelogo.svg')
+
+@app.route('/title.svg')
+def title():
+    return send_from_directory('public', 'title.svg')
+
+@app.route('/logoimage.svg')
+def logoimage():
+    return send_from_directory('public', 'logoimage.svg')
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():

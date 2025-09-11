@@ -8,6 +8,10 @@
   ],
   "routes": [
     {
+      "src": "/(favicon\\.ico|.*\\.svg|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.gif|.*\\.css|.*\\.js)$",
+      "dest": "/$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "app.py"
     }
