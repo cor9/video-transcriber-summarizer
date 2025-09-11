@@ -291,6 +291,17 @@ def format_output(summary_text, format_type="html"):
 def index():
     return render_template('index.html')
 
+@app.route('/<path:filename>')
+def serve_static(filename):
+    """Serve static files"""
+    if filename.endswith(('.svg', '.ico', '.png', '.jpg', '.jpeg', '.gif', '.css', '.js')):
+        try:
+            return send_file(filename)
+        except FileNotFoundError:
+            return "File not found", 404
+    else:
+        return "Not found", 404
+
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
