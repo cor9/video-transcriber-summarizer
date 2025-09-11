@@ -49,8 +49,15 @@ Transcript:
 {transcript}
 """,
     
-    "timeline": """
-Create a chronological timeline of the main events, topics, or points discussed in this video transcript. Include timestamps if possible and organize the content in the order it was presented.
+    "actionable_guide": """
+Transform the following video transcript into a practical, actionable guide. Focus on:
+1. Step-by-step instructions
+2. Specific actions the viewer can take
+3. Tools, resources, or methods mentioned
+4. Key takeaways that can be implemented immediately
+5. Clear, actionable advice
+
+Format as a practical guide with numbered steps and actionable items.
 
 Transcript:
 {transcript}

@@ -9,7 +9,7 @@ A powerful web application that transcribes videos using AssemblyAI and generate
   - 📝 Bullet Points
   - 💡 Key Insights  
   - 📋 Detailed Summary
-  - ⏰ Timeline
+  - 📋 Actionable Guide
 - **Multiple Output Formats**: Download summaries as HTML or Markdown files
 - **Modern Web Interface**: Clean, responsive design with real-time progress tracking
 - **Temporary File Management**: Secure handling of temporary files with automatic cleanup
@@ -57,7 +57,7 @@ A powerful web application that transcribes videos using AssemblyAI and generate
    - **Bullet Points**: Clean, concise bullet-point format
    - **Key Insights**: Structured analysis with headings
    - **Detailed Summary**: Comprehensive overview with sections
-   - **Timeline**: Chronological organization of content
+   - **Actionable Guide**: Step-by-step instructions and practical advice
 
 3. **Select Output Format**: Choose between HTML or Markdown for your download
 
