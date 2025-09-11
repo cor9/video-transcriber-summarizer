@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Transcriber & Summarizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .form-container {
+            padding: 40px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        input[type="url"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        input[type="url"]:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+
+        select {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+
+        .radio-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .radio-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .radio-item:hover {
+            border-color: #3498db;
+            background-color: #f8f9fa;
+        }
+
+        .radio-item input[type="radio"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+        }
+
+        .radio-item input[type="radio"]:checked + label {
+            color: #3498db;
+            font-weight: 600;
+        }
+
+        .radio-item:has(input[type="radio"]:checked) {
+            border-color: #3498db;
+            background-color: #e3f2fd;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3);
+        }
+
+        .submit-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results {
+            display: none;
+            margin-top: 30px;
+            padding: 30px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #27ae60;
+        }
+
+        .results h3 {
+            color: #27ae60;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .result-section {
+            margin-bottom: 25px;
+        }
+
+        .result-section h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .transcript-preview {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .summary-content {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e1e8ed;
+            line-height: 1.6;
+        }
+
+        .download-btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(39, 174, 96, 0.3);
+        }
+
+        .error {
+            display: none;
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .progress-steps {
+            display: none;
+            margin: 20px 0;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .step.active {
+            background: #e3f2fd;
+            border-left: 4px solid #3498db;
+        }
+
+        .step.completed {
+            background: #e8f5e8;
+            border-left: 4px solid #27ae60;
+        }
+
+        .step-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-weight: bold;
+            color: white;
+        }
+
+        .step.active .step-icon {
+            background: #3498db;
+        }
+
+        .step.completed .step-icon {
+            background: #27ae60;
+        }
+
+        .step.pending .step-icon {
+            background: #bdc3c7;
+        }
+
+        @media (max-width: 600px) {
+            .radio-group {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .form-container {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Video Transcriber & Summarizer</h1>
+            <p>Transform any video into structured summaries with AI-powered transcription</p>
+        </div>
+
+        <div class="form-container">
+            <form id="transcribeForm">
+                <div class="form-group">
+                    <label for="videoUrl">Video URL</label>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://example.com/video.mp4" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Summarization Style</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" id="bullet_points" name="promptChoice" value="bullet_points" checked>
+                            <label for="bullet_points">📝 Bullet Points</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" id="key_insights" name="promptChoice" value="key_insights">
+                            <label for="key_insights">💡 Key Insights</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" id="detailed_summary" name="promptChoice" value="detailed_summary">
+                            <label for="detailed_summary">📋 Detailed Summary</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" id="timeline" name="promptChoice" value="timeline">
+                            <label for="timeline">⏰ Timeline</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="outputFormat">Output Format</label>
+                    <select id="outputFormat" name="outputFormat">
+                        <option value="html">HTML Document</option>
+                        <option value="markdown">Markdown File</option>
+                    </select>
+                </div>
+
+                <button type="submit" class="submit-btn" id="submitBtn">
+                    🚀 Transcribe & Summarize
+                </button>
+            </form>
+
+            <div class="progress-steps" id="progressSteps">
+                <div class="step active" id="step1">
+                    <div class="step-icon">1</div>
+                    <div>Transcribing video...</div>
+                </div>
+                <div class="step pending" id="step2">
+                    <div class="step-icon">2</div>
+                    <div>Generating summary...</div>
+                </div>
+                <div class="step pending" id="step3">
+                    <div class="step-icon">3</div>
+                    <div>Formatting output...</div>
+                </div>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing your video... This may take a few minutes.</p>
+            </div>
+
+            <div class="error" id="error"></div>
+
+            <div class="results" id="results">
+                <h3>✅ Processing Complete!</h3>
+                
+                <div class="result-section">
+                    <h4>📄 Transcript Preview</h4>
+                    <div class="transcript-preview" id="transcriptPreview"></div>
+                </div>
+
+                <div class="result-section">
+                    <h4>📝 Summary</h4>
+                    <div class="summary-content" id="summaryContent"></div>
+                </div>
+
+                <a href="#" class="download-btn" id="downloadBtn">📥 Download Summary</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const videoUrl = document.getElementById('videoUrl').value;
+            const promptChoice = document.querySelector('input[name="promptChoice"]:checked').value;
+            const outputFormat = document.getElementById('outputFormat').value;
+            
+            // Show loading state
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('progressSteps').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('submitBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/transcribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        video_url: videoUrl,
+                        prompt_choice: promptChoice,
+                        output_format: outputFormat
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Show results
+                    document.getElementById('transcriptPreview').textContent = data.transcript.substring(0, 500) + '...';
+                    document.getElementById('summaryContent').innerHTML = data.summary.replace(/\n/g, '<br>');
+                    document.getElementById('downloadBtn').href = `/download/${data.download_file.split('/').pop()}`;
+                    document.getElementById('results').style.display = 'block';
+                    
+                    // Update progress steps
+                    document.getElementById('step1').classList.add('completed');
+                    document.getElementById('step1').classList.remove('active');
+                    document.getElementById('step2').classList.add('completed');
+                    document.getElementById('step2').classList.remove('pending');
+                    document.getElementById('step3').classList.add('completed');
+                    document.getElementById('step3').classList.remove('pending');
+                } else {
+                    throw new Error(data.error || 'An error occurred');
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('submitBtn').disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
