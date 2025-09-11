@@ -16,18 +16,18 @@
     <meta property="og:description" content="Transform any video into structured summaries with AI-powered transcription. Convert videos to text and create intelligent summaries.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://vidscribe2ai.site">
-    <meta property="og:image" content="https://vidscribe2ai.site/site%20logo.svg">
+    <meta property="og:image" content="https://vidscribe2ai.site/sitelogo.svg">
     <meta property="og:site_name" content="VidScribe2AI">
     
     <!-- Twitter Card Meta Tags -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="VidScribe2AI - AI Video Transcription & Summarization">
     <meta name="twitter:description" content="Transform any video into structured summaries with AI-powered transcription.">
-    <meta name="twitter:image" content="https://vidscribe2ai.site/site%20logo.svg">
+    <meta name="twitter:image" content="https://vidscribe2ai.site/sitelogo.svg">
     
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <link rel="icon" type="image/svg+xml" href="/site%20logo.svg">
+    <link rel="icon" type="image/svg+xml" href="/sitelogo.svg">
     
     <!-- Structured Data -->
     <script type="application/ld+json">
@@ -130,21 +130,16 @@
             width: 80px;
             height: 80px;
             margin: 0 auto 20px;
-            background: linear-gradient(135deg, #00b4d8 0%, #0077b6 100%);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             position: relative;
             box-shadow: 0 10px 30px rgba(0, 180, 216, 0.3);
+            animation: pulse 2s ease-in-out infinite;
         }
 
-        .logo::before {
-            content: '▶';
-            color: white;
-            font-size: 30px;
-            font-weight: bold;
-            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        .logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 50%;
         }
 
         .logo::after {
@@ -475,7 +470,9 @@
     <div class="container">
         <div class="header">
             <div class="logo-container">
-                <div class="logo"></div>
+                <div class="logo">
+                    <img src="/sitelogo.svg" alt="VidScribe2AI Logo">
+                </div>
             </div>
             <h1>VidScribe2AI</h1>
             <p>Transform any video into structured summaries with AI-powered transcription</p>
