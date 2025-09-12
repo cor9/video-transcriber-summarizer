@@ -47,18 +47,40 @@ def get_gemini(model="gemini-1.5-flash"):
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
-def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
-    model = get_gemini("gemini-1.5-flash")
-    if not model:
-        return text[:1200]  # minimal fallback (no key)
+def summarize_with_gemini(text: str, summary_format: str = "bullet_points") -> str:
+    """Robust Gemini summarization with detailed logging and retries"""
+    import time
+    import random
+    
+    key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("GOOGLE_API_KEY not set in runtime")
+    genai.configure(api_key=key)
+
     prompts = {
-        "bullet_points": "Summarize in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
-        "detailed_summary": "Write a clear, structured summary: topic/purpose, key points, notable examples, conclusions/next steps.\n\nTranscript:\n{t}",
+        "bullet_points": "Summarize in crisp bullet points with actionable takeaways.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights; use short headings with one-sentence explanations.\n\nTranscript:\n{t}",
+        "detailed_summary": "Write a structured summary: purpose, key points, examples, conclusions, next steps.\n\nTranscript:\n{t}",
     }
     prompt = prompts.get(summary_format, prompts["bullet_points"]).format(t=text[:200_000])
-    resp = model.generate_content(prompt)
-    return (resp.text or "").strip()
+
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    last_err = None
+    for attempt in range(1, 4):
+        t0 = time.time()
+        try:
+            resp = model.generate_content(prompt)
+            out = (resp.text or "").strip()
+            dt = round(time.time() - t0, 3)
+            print(f"[GEMINI] attempt={attempt} seconds={dt} chars_out={len(out)}")
+            if out:
+                return out
+            raise RuntimeError("Empty response from Gemini")
+        except Exception as e:
+            last_err = e
+            print(f"[GEMINI] attempt={attempt} failed: {e}")
+            time.sleep(min(2 ** attempt + random.random(), 8))
+    raise RuntimeError(f"Gemini summarization failed after retries: {last_err}")
 
 def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
     """Generate download content for serverless environment (no file writing)"""
@@ -101,31 +123,26 @@ def vtt_to_text(vtt: str) -> str:
 
 def clean_paste(text: str) -> str:
     """Clean pasted text by removing Tactiq metadata and timestamps"""
-    lines = []
+    import re
+    
+    cleaned = []
     for line in text.splitlines():
-        line = line.strip()
-        if not line:
+        l = line.strip()
+        if not l: 
             continue
-            
+        low = l.lower()
+        
         # strip tactiq headers/URLs
-        if line.lower().startswith("tactiq.io"):
+        if low.startswith("tactiq.io") or low.startswith("no title found"):
             continue
-        if line.lower().startswith("no title found"):
-            continue
-        if "youtube.com/watch" in line.lower():
+        if "youtube.com/watch" in low or "youtu.be/" in low:
             continue
             
-        # strip timecodes like 00:00:00.000
-        if line.startswith("00:"):
-            # drop just the timestamp, keep words
-            parts = line.split(" ", 2)
-            if len(parts) >= 3:
-                line = parts[2]
-            else:
-                continue
-                
-        lines.append(line)
-    return "\n".join(lines).strip()
+        # strip 00:00:00.000 / 00:00:00,000 at start
+        l = re.sub(r"^\d{2}:\d{2}:\d{2}[.,]\d{1,3}\s*", "", l)
+        
+        cleaned.append(l)
+    return "\n".join(cleaned).strip()
 
 @app.route('/')
 def index():
@@ -346,6 +363,10 @@ def index():
 
             <div class="error" id="error"></div>
 
+            <div class="progress" id="progress" style="display:none; margin-top:20px; padding:15px; background:#e8f4fd; border-radius:8px; border-left:4px solid #3498db;">
+                <div id="progressText">Processing...</div>
+            </div>
+
             <div class="results" id="results">
                 <h3>✅ Processing Complete!</h3>
                 <div id="transcriptContent"></div>
@@ -367,6 +388,8 @@ def index():
             });
         });
 
+        const progress = msg => document.getElementById('progressText').textContent = msg;
+
         document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -381,12 +404,14 @@ def index():
             document.getElementById('submitBtn').textContent = '🔄 Processing...';
             document.getElementById('results').style.display = 'none';
             document.getElementById('error').style.display = 'none';
+            document.getElementById('progress').style.display = 'block';
+            progress('Preparing request...');
             
             try {
                 let response;
                 
                 if (mode === 'upload' && subtitleFile) {
-                    // Handle file upload
+                    progress('Uploading file...');
                     const formData = new FormData();
                     formData.append('file', subtitleFile);
                     formData.append('summary_format', summaryFormat);
@@ -395,21 +420,37 @@ def index():
                         method: 'POST',
                         body: formData
                     });
-                } else {
-                    // Handle regular processing
+                } else if (mode === 'paste') {
+                    progress('Cleaning transcript...');
                     response = await fetch('/process', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
                             mode,
-                        video_url: videoUrl,
+                            video_url: videoUrl,
                             raw_transcript: rawTranscript,
                             summary_format: summaryFormat
-                    })
-                });
+                        })
+                    });
+                } else {
+                    progress('Fetching captions...');
+                    response = await fetch('/process', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            mode,
+                            video_url: videoUrl,
+                            raw_transcript: rawTranscript,
+                            summary_format: summaryFormat
+                        })
+                    });
                 }
+                
+                progress('Summarizing with Gemini...');
                 
                 const data = await response.json();
                 
@@ -447,6 +488,7 @@ def index():
                 document.getElementById('error').innerHTML = 'Error: ' + error.message;
                 document.getElementById('error').style.display = 'block';
             } finally {
+                document.getElementById('progress').style.display = 'none';
                 document.getElementById('submitBtn').disabled = false;
                 document.getElementById('submitBtn').textContent = '🚀 Process';
             }
@@ -458,11 +500,30 @@ def index():
 
 @app.route('/health')
 def health():
-    return jsonify({
-        'status': 'healthy', 
-        'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.3.1-vercel-compatible'
-    })
+    """Comprehensive health check that tests Gemini API connectivity"""
+    import time
+    
+    key = os.getenv("GOOGLE_API_KEY", "").strip()
+    ok_key = bool(key)
+    detail = {"gemini_key_found": ok_key}
+
+    if not ok_key:
+        return jsonify(detail | {"status": "no_key_in_runtime"}), 500
+
+    try:
+        genai.configure(api_key=key)
+        t0 = time.time()
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        resp = model.generate_content("respond with the single word: ok")
+        dt = round(time.time() - t0, 3)
+        detail |= {
+            "status": "gemini_ok",
+            "rt_seconds": dt,
+            "sample": (resp.text or "").strip()[:20]
+        }
+        return jsonify(detail), 200
+    except Exception as e:
+        return jsonify(detail | {"status": "gemini_error", "error": str(e)}), 500
 
 @app.route('/upload_subs', methods=['POST'])
 def upload_subs():
