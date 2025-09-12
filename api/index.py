@@ -43,13 +43,19 @@ def is_youtube_url(url: str) -> bool:
 def fetch_youtube_captions_text(video_url: str, languages=("en", "en-US", "en-GB")) -> str | None:
     vid = extract_video_id(video_url)
     if not vid:
+        print(f"No video ID found for: {video_url}")
         return None
     try:
+        print(f"Attempting to fetch captions for video ID: {vid}")
         transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        return "\n".join([item.get("text","") for item in transcript_list]).strip() or None
-    except (TranscriptsDisabled, NoTranscriptFound):
+        text = "\n".join([item.get("text","") for item in transcript_list]).strip()
+        print(f"Successfully fetched captions: {len(text)} characters")
+        return text or None
+    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        print(f"No captions available: {e}")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Error fetching captions: {e}")
         return None
 
 def transcribe_direct_media_url(media_url: str) -> str:
@@ -468,8 +474,10 @@ def process_video():
 
         # Try YouTube captions path first (no downloads, no Tactiq)
         if is_youtube_url(video_url):
+            print(f"Processing YouTube URL: {video_url}")
             video_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
             captions = fetch_youtube_captions_text(video_url)
+            print(f"Captions result: {'SUCCESS' if captions else 'FAILED'}")
             if captions:
                 # Summarize
                 summary_md = summarize_text_with_anthropic(captions, summary_format)
