@@ -562,7 +562,7 @@ def upload_subs():
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
         if not file.filename.lower().endswith(('.srt', '.vtt', '.txt')):
-            return jsonify({'success': False, 'error': 'Only SRT, VTT, and TXT files are supported'}), 400
+            return jsonify({'success': False, 'error': 'Only SRT, VTT, and TXT files are supported. Please upload a subtitle file or text file.'}), 400
         
         # Read file content
         content = file.read().decode('utf-8', errors='ignore')
