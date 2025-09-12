@@ -217,9 +217,27 @@ HTML_TEMPLATE = '''
                     </select>
                 </div>
 
+                <div class="form-group">
+                    <label for="contextHints">Context Hints (optional)</label>
+                    <textarea id="contextHints" name="contextHints" rows="3" placeholder="Audience, tone, use cases, what to emphasize (e.g., 'Audience: developers; tone: technical; focus on implementation details')"></textarea>
+                    <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
+                        💡 <strong>Examples:</strong><br>
+                        • "Audience: parents; tone: practical; include safety tips"<br>
+                        • "Focus on business applications and ROI"<br>
+                        • "Technical audience; emphasize code examples"
+                    </small>
+                </div>
+
                 <button type="submit" class="submit-btn" id="submitBtn">
                     🚀 Process Video
                 </button>
+                
+                <div style="margin-top: 20px; text-align: center;">
+                    <button type="button" id="healthCheckBtn" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        🔍 Check System Health
+                    </button>
+                    <div id="healthStatus" style="margin-top: 10px; font-size: 14px;"></div>
+                </div>
             </form>
 
             <div class="progress" id="progress">
@@ -233,30 +251,52 @@ HTML_TEMPLATE = '''
                 <h3>✅ Processing Complete!</h3>
                 <div id="transcriptContent"></div>
                 <div class="download-links" id="downloadLinks"></div>
+                
+                <!-- Feedback Section -->
+                <div id="feedbackSection" style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef;">
+                    <h4 style="margin-bottom: 15px; color: #2c3e50;">Was this summary helpful?</h4>
+                    <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                        <button id="thumbsUp" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+                            👍 Yes, helpful
+                        </button>
+                        <button id="thumbsDown" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+                            👎 Not helpful
+                        </button>
+                    </div>
+                    <div id="feedbackForm" style="display: none;">
+                        <textarea id="feedbackNotes" placeholder="Tell us what could be improved..." rows="3" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px;"></textarea>
+                        <button id="submitFeedback" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                            Submit Feedback
+                        </button>
+                    </div>
+                    <div id="feedbackThanks" style="display: none; color: #28a745; font-weight: bold;">
+                        Thank you for your feedback! 🙏
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentJobId = null;
-        let pollInterval = null;
-
         document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const videoUrl = document.getElementById('videoUrl').value;
             const summaryFormat = document.getElementById('summaryFormat').value;
+            const contextHints = document.getElementById('contextHints').value
+                .split('\n')
+                .map(s => s.trim())
+                .filter(Boolean);
             
             // Show progress, hide other elements
             document.getElementById('submitBtn').disabled = true;
-            document.getElementById('submitBtn').textContent = '🔄 Submitting...';
+            document.getElementById('submitBtn').textContent = '🔄 Processing...';
             document.getElementById('results').style.display = 'none';
             document.getElementById('error').style.display = 'none';
             document.getElementById('progress').style.display = 'block';
-            document.getElementById('progressText').textContent = 'Submitting job...';
+            document.getElementById('progressText').textContent = 'Processing video...';
             
             try {
-                // Submit job
                 const response = await fetch('/api/submit', {
                     method: 'POST',
                     headers: {
@@ -264,107 +304,145 @@ HTML_TEMPLATE = '''
                     },
                     body: JSON.stringify({
                         video_url: videoUrl,
-                        summary_format: summaryFormat
+                        summary_format: summaryFormat,
+                        context_hints: contextHints
                     })
                 });
                 
                 const data = await response.json();
                 
                 if (data.success) {
-                    currentJobId = data.job_id;
-                    document.getElementById('submitBtn').textContent = '🔄 Processing...';
-                    document.getElementById('progressText').textContent = 'Job submitted! Processing...';
-                    
-                    // Start polling for status
-                    startPolling();
+                    showResults(data);
                 } else {
-                    throw new Error(data.error || 'Failed to submit job');
+                    throw new Error(data.error || 'Processing failed');
                 }
             } catch (error) {
                 document.getElementById('error').innerHTML = 'Error: ' + error.message;
                 document.getElementById('error').style.display = 'block';
-                resetForm();
+            } finally {
+                document.getElementById('submitBtn').disabled = false;
+                document.getElementById('submitBtn').textContent = '🚀 Process Video';
+                document.getElementById('progress').style.display = 'none';
             }
         });
 
-        function startPolling() {
-            if (pollInterval) clearInterval(pollInterval);
-            
-            pollInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`/api/status?job_id=${currentJobId}`);
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        updateProgress(data);
-                        
-                        if (data.status === 'completed') {
-                            showResults(data);
-                            clearInterval(pollInterval);
-                            resetForm();
-                        } else if (data.status === 'failed') {
-                            throw new Error(data.error || 'Job failed');
-                        }
-                    } else {
-                        throw new Error(data.error || 'Failed to check status');
-                    }
-                } catch (error) {
-                    document.getElementById('error').innerHTML = 'Error: ' + error.message;
-                    document.getElementById('error').style.display = 'block';
-                    clearInterval(pollInterval);
-                    resetForm();
-                }
-            }, 2000); // Poll every 2 seconds
-        }
-
-        function updateProgress(jobData) {
-            const statusMessages = {
-                'queued': 'Job queued, waiting to start...',
-                'processing': 'Processing video...',
-                'completed': 'Processing complete!'
+        function showResults(data) {
+            // Store video data for feedback
+            currentVideoData = {
+                video_url: document.getElementById('videoUrl').value,
+                summary_format: document.getElementById('summaryFormat').value,
+                meta: data.meta
             };
             
-            document.getElementById('progressText').textContent = 
-                statusMessages[jobData.status] || `Status: ${jobData.status}`;
-        }
-
-        function showResults(jobData) {
-            const downloadLinks = jobData.download_links || {};
+            // Create download links
             let linksHtml = '';
-            
-            if (downloadLinks.transcript) {
-                linksHtml += `<a href="${downloadLinks.transcript}" target="_blank" class="download-link">📄 Download Transcript</a>`;
+            if (data.transcript) {
+                linksHtml += `<a href="data:text/plain;charset=utf-8,${encodeURIComponent(data.transcript)}" download="transcript.txt" class="download-link">📄 Download Transcript</a>`;
             }
-            if (downloadLinks.summary) {
-                linksHtml += `<a href="${downloadLinks.summary}" target="_blank" class="download-link">📝 Download Summary</a>`;
-            }
-            if (downloadLinks.html) {
-                linksHtml += `<a href="${downloadLinks.html}" target="_blank" class="download-link">🌐 View HTML</a>`;
+            if (data.summary_md) {
+                linksHtml += `<a href="data:text/markdown;charset=utf-8,${encodeURIComponent(data.summary_md)}" download="summary.md" class="download-link">📝 Download Summary</a>`;
             }
             
             document.getElementById('downloadLinks').innerHTML = linksHtml;
+            
+            // Show results
             document.getElementById('transcriptContent').innerHTML = `
                 <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h3 style="color: #2c3e50; margin-bottom: 20px;">✅ Processing Complete!</h3>
-                    <p>Your video has been processed successfully. Download the files using the links below.</p>
-                    <div style="margin-top: 20px; padding: 15px; background: #e8f4fd; border-radius: 8px; border-left: 4px solid #3498db;">
-                        <strong>Job ID:</strong> ${jobData.job_id}<br>
-                        <strong>Video URL:</strong> ${jobData.video_url}<br>
-                        <strong>Format:</strong> ${jobData.summary_format.replace('_', ' ')}
+                    <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">
+                        ${data.transcript || 'No transcript available'}
                     </div>
+                    
+                    <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary (${data.summary_format ? data.summary_format.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Bullet Points'})</h3>
+                    <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">
+                        ${data.summary_html || data.summary_md || 'No summary available'}
+                    </div>
+                    
+                    ${data.meta ? `
+                    <div style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px; font-size: 12px; color: #666;">
+                        <strong>Source:</strong> ${data.meta.captions_source || 'Unknown'} | 
+                        <strong>Processing:</strong> Direct Cloud Run
+                    </div>
+                    ` : ''}
                 </div>
             `;
             document.getElementById('results').style.display = 'block';
         }
 
-        function resetForm() {
-            document.getElementById('submitBtn').disabled = false;
-            document.getElementById('submitBtn').textContent = '🚀 Process Video';
-            document.getElementById('progress').style.display = 'none';
-            currentJobId = null;
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
+        // Health check functionality
+        document.getElementById('healthCheckBtn').addEventListener('click', async function() {
+            const btn = document.getElementById('healthCheckBtn');
+            const status = document.getElementById('healthStatus');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Checking...';
+            status.textContent = 'Checking system health...';
+            
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        video_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ',
+                        summary_format: 'bullet_points',
+                        context_hints: ['Health check test']
+                    })
+                });
+                
+                if (response.ok) {
+                    status.innerHTML = '<span style="color: #28a745;">✅ System healthy - Cloud Run worker responding</span>';
+                } else {
+                    status.innerHTML = '<span style="color: #dc3545;">❌ System unhealthy - Worker not responding</span>';
+                }
+            } catch (error) {
+                status.innerHTML = '<span style="color: #dc3545;">❌ System unhealthy - ' + error.message + '</span>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Check System Health';
+            }
+        });
+
+        // Feedback functionality
+        let currentVideoData = null;
+        
+        document.getElementById('thumbsUp').addEventListener('click', function() {
+            submitFeedback(true);
+        });
+        
+        document.getElementById('thumbsDown').addEventListener('click', function() {
+            document.getElementById('feedbackForm').style.display = 'block';
+        });
+        
+        document.getElementById('submitFeedback').addEventListener('click', function() {
+            const notes = document.getElementById('feedbackNotes').value;
+            submitFeedback(false, notes);
+        });
+        
+        async function submitFeedback(helpful, notes = '') {
+            if (!currentVideoData) return;
+            
+            try {
+                const response = await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        video_url: currentVideoData.video_url,
+                        summary_format: currentVideoData.summary_format,
+                        helpful: helpful,
+                        notes: notes,
+                        meta: currentVideoData.meta || {}
+                    })
+                });
+                
+                if (response.ok) {
+                    // Hide feedback buttons and show thanks
+                    document.getElementById('thumbsUp').style.display = 'none';
+                    document.getElementById('thumbsDown').style.display = 'none';
+                    document.getElementById('feedbackForm').style.display = 'none';
+                    document.getElementById('feedbackThanks').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to submit feedback:', error);
             }
         }
     </script>

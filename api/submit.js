@@ -1,10 +1,7 @@
 /**
- * Vercel API route for submitting video processing jobs
- * This replaces the heavy /process route with a lightweight job enqueuer
+ * Vercel API route for video summarization
+ * Calls Cloud Run worker directly instead of using job queue
  */
-
-import { GoogleAuth } from 'google-auth-library';
-import { PubSub } from '@google-cloud/pubsub';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -12,54 +9,55 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { video_url, summary_format = 'bullet_points' } = req.body;
+    const { video_url, summary_format = 'bullet_points', context_hints = [] } = req.body;
 
     if (!video_url) {
       return res.status(400).json({ error: 'video_url is required' });
     }
 
-    // Initialize Pub/Sub client
-    const pubsub = new PubSub({
-      projectId: process.env.GOOGLE_CLOUD_PROJECT,
-      keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
+    // Call Cloud Run worker directly
+    const workerUrl = process.env.WORKER_URL;
+    if (!workerUrl) {
+      return res.status(500).json({ error: 'WORKER_URL not configured' });
+    }
+
+    const response = await fetch(`${workerUrl}/summarize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        url: video_url,
+        summary_format,
+        context_hints: context_hints || [
+          "Audience: general; tone: informative and concise",
+          "Prefer actionable insights and key takeaways"
+        ]
+      })
     });
 
-    // Generate job ID
-    const job_id = crypto.randomUUID();
+    const data = await response.json();
 
-    // Create job data
-    const jobData = {
-      job_id,
-      video_url,
-      summary_format,
-      status: 'queued',
-      created_at: new Date().toISOString()
-    };
-
-    // Publish to Pub/Sub topic
-    const topic = pubsub.topic(process.env.PUBSUB_TOPIC || 'transcribe-jobs');
-    const messageId = await topic.publishMessage({
-      data: Buffer.from(JSON.stringify(jobData)),
-      attributes: {
-        job_id,
-        video_url,
-        summary_format
-      }
-    });
-
-    console.log(`Enqueued job ${job_id} with message ID ${messageId}`);
+    if (!response.ok || !data.success) {
+      return res.status(502).json({ 
+        error: data.error || 'Worker failed',
+        details: data
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      job_id,
-      status: 'queued',
-      message: 'Job enqueued successfully'
+      transcript: data.transcript_text,
+      summary_md: data.summary_md,
+      summary_html: data.summary_html,
+      meta: data.meta,
+      message: 'Video processed successfully'
     });
 
   } catch (error) {
-    console.error('Error submitting job:', error);
+    console.error('Error processing video:', error);
     return res.status(500).json({
-      error: 'Failed to submit job',
+      error: 'Failed to process video',
       details: error.message
     });
   }
