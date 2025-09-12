@@ -826,7 +826,9 @@ def transcribe():
 
         if is_youtube:
             # 1) Try official captions first (legal, fast, free)
+            print(f"Processing YouTube URL: {video_url}")
             transcript_text = fetch_youtube_captions_text(video_url)
+            print(f"Captions result: {'SUCCESS' if transcript_text else 'FAILED'}")
             if not transcript_text:
                 # No captions available
                 return jsonify({
