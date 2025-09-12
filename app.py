@@ -16,13 +16,15 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Check if API keys are provided
 if not ASSEMBLYAI_API_KEY:
-    raise ValueError("ASSEMBLYAI_API_KEY environment variable is required")
+    print("WARNING: ASSEMBLYAI_API_KEY environment variable is not set")
 if not ANTHROPIC_API_KEY:
-    raise ValueError("ANTHROPIC_API_KEY environment variable is required")
+    print("WARNING: ANTHROPIC_API_KEY environment variable is not set")
 
-# Initialize API clients
-aai.settings.api_key = ASSEMBLYAI_API_KEY
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+# Initialize API clients only if keys are available
+if ASSEMBLYAI_API_KEY:
+    aai.settings.api_key = ASSEMBLYAI_API_KEY
+if ANTHROPIC_API_KEY:
+    anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Prompt templates for different summarization styles
 PROMPT_TEMPLATES = {
@@ -372,6 +374,12 @@ def serve_static(filename):
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     try:
+        # Check if API keys are available
+        if not ASSEMBLYAI_API_KEY:
+            return jsonify({'error': 'ASSEMBLYAI_API_KEY environment variable is not set. Please configure it in Vercel dashboard.'}), 500
+        if not ANTHROPIC_API_KEY:
+            return jsonify({'error': 'ANTHROPIC_API_KEY environment variable is not set. Please configure it in Vercel dashboard.'}), 500
+        
         data = request.get_json()
         video_url = data.get('video_url')
         prompt_choice = data.get('prompt_choice', 'bullet_points')
