@@ -536,7 +536,7 @@ def health():
     import time
     
     key_src = "GEMINI_API_KEY" if os.getenv("GEMINI_API_KEY") else ("GOOGLE_API_KEY" if os.getenv("GOOGLE_API_KEY") else None)
-    detail = {"key_source": key_src or "none"}
+    detail = {"key_source": key_src or "none", "deploy_test": "hook_working"}
     
     if not key_src:
         return jsonify(detail | {"status": "no_key"}), 500
