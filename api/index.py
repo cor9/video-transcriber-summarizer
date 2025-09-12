@@ -46,7 +46,7 @@ def fetch_youtube_transcript_text(video_url: str, languages=("en", "en-US", "en-
     if not vid:
         return None
     try:
-        # Use the correct API
+        # Use the correct API for version 1.2.2
         api = YouTubeTranscriptApi()
         transcript_list = api.list(vid)
         
