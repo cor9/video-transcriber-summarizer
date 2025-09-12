@@ -570,9 +570,14 @@ def index():
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
                         🎥 <strong>Supported Input Types:</strong><br>
                         ✅ <strong>Direct media URLs:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        ⚠️ <strong>YouTube URLs:</strong> Limited support due to restrictions<br>
-                        💡 <em>For best results: Use direct media URLs or download YouTube videos manually</em><br>
-                        🔄 <em>YouTube workaround: Download → Upload to cloud storage → Use direct link</em>
+                        ⚠️ <strong>YouTube URLs:</strong> May be blocked by YouTube's anti-bot measures<br>
+                        💡 <em>For best results: Use direct media URLs or try the workarounds below</em><br>
+                        🔄 <strong>YouTube Workarounds:</strong><br>
+                        &nbsp;&nbsp;1️⃣ Download video manually (yt-dlp, 4K Video Downloader)<br>
+                        &nbsp;&nbsp;2️⃣ Upload audio to Google Drive/Dropbox → Use direct link<br>
+                        &nbsp;&nbsp;3️⃣ Try shorter videos (under 5 minutes work better)<br>
+                        &nbsp;&nbsp;4️⃣ Use videos with captions (they process faster)<br>
+                        ⏱️ <strong>Note:</strong> Vercel free tier has 10-second timeout limits
                     </small>
                 </div>
 
