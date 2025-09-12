@@ -50,6 +50,11 @@
 **Decision:** Added file download endpoints (/download/<filename>), enhanced generate_output_files to create downloadable files with unique IDs, updated UI to show download links, implemented proper file storage in /tmp/vidscribe_outputs directory, added comprehensive HTML styling for downloaded files
 **Status:** Success
 
+## 2025-01-12
+**Issue:** Vercel deployment failing with 500 errors due to pytube compatibility and Anthropic client initialization issues
+**Decision:** Replaced pytube with yt-dlp for better serverless compatibility, implemented lazy initialization for Anthropic client to avoid import errors, updated YouTube download function to use yt-dlp with proper error handling
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 

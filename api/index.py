@@ -25,13 +25,13 @@ if ASSEMBLYAI_API_KEY:
 anthropic_client = None
 
 def download_audio_from_youtube(youtube_url):
-    """Download audio from YouTube URL using yt-dlp"""
+    """Download audio from YouTube URL using yt-dlp with bot detection bypass"""
     try:
         # Create temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         temp_file.close()
         
-        # Configure yt-dlp options
+        # Configure yt-dlp options with bot detection bypass
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': temp_file.name,
@@ -40,6 +40,22 @@ def download_audio_from_youtube(youtube_url):
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            # Bot detection bypass
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                'Connection': 'keep-alive',
+            },
+            # Additional options to bypass restrictions
+            'extractor_retries': 3,
+            'fragment_retries': 3,
+            'retries': 3,
+            'socket_timeout': 30,
+            'sleep_interval': 1,
+            'max_sleep_interval': 5,
         }
         
         # Download audio
@@ -53,7 +69,11 @@ def download_audio_from_youtube(youtube_url):
         return temp_file.name
         
     except Exception as e:
-        raise Exception(f"Failed to download YouTube audio: {str(e)}")
+        # If YouTube blocks the download, provide helpful error message
+        if "Sign in to confirm you're not a bot" in str(e) or "bot" in str(e).lower():
+            raise Exception("YouTube is blocking automated downloads. Please try a different video or use a direct media URL instead. You can also try downloading the video manually and uploading it to a cloud storage service.")
+        else:
+            raise Exception(f"Failed to download YouTube audio: {str(e)}")
 
 def transcribe_audio_with_assemblyai(audio_file_path):
     """Transcribe local audio file using AssemblyAI"""
@@ -394,10 +414,10 @@ def index():
                     <label for="videoUrl">Video/Audio URL</label>
                     <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        🎥 <strong>YouTube URLs now supported!</strong><br>
+                        🎥 <strong>YouTube URLs supported!</strong><br>
                         ✅ Direct media: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
                         ✅ YouTube: Any public YouTube video URL<br>
-                        💡 <em>Processing may take longer for YouTube videos due to download time</em>
+                        ⚠️ <em>Note: Some YouTube videos may be blocked by bot detection. If this happens, try a different video or use a direct media URL.</em>
                     </small>
                 </div>
 
@@ -557,13 +577,35 @@ def transcribe():
             # YouTube workflow: Download → Transcribe → Summarize
             print(f"Processing YouTube URL: {video_url}")
             
-            # Step 1: Download audio from YouTube
-            temp_audio_file = download_audio_from_youtube(video_url)
-            print(f"Downloaded audio to: {temp_audio_file}")
-            
-            # Step 2: Transcribe local audio file
-            transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
-            print("Transcription completed")
+            try:
+                # Step 1: Download audio from YouTube
+                temp_audio_file = download_audio_from_youtube(video_url)
+                print(f"Downloaded audio to: {temp_audio_file}")
+                
+                # Step 2: Transcribe local audio file
+                transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
+                print("Transcription completed")
+                
+            except Exception as e:
+                # Provide helpful error message for YouTube issues
+                if "blocking automated downloads" in str(e):
+                    return jsonify({
+                        'error': 'YouTube Download Blocked',
+                        'message': 'YouTube is blocking automated downloads for this video.',
+                        'suggestions': [
+                            'Try a different YouTube video',
+                            'Use a direct media URL instead (MP4, MP3, etc.)',
+                            'Download the video manually and upload to cloud storage',
+                            'Try again later - sometimes the block is temporary'
+                        ],
+                        'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
+                        'example_urls': [
+                            'https://example.com/video.mp4',
+                            'https://example.com/audio.mp3'
+                        ]
+                    }), 400
+                else:
+                    raise e
             
         else:
             # Direct URL workflow: Transcribe directly
