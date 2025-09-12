@@ -568,11 +568,11 @@ def index():
                     <label for="videoUrl">Video/Audio URL</label>
                     <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        🎥 <strong>Multiple Input Options!</strong><br>
-                        ✅ Direct media: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        ✅ YouTube: Any public YouTube video URL (uses captions when available)<br>
-                        💡 <em>Smart fallback: Tries YouTube captions first, then audio download if needed</em><br>
-                        🔄 <em>If YouTube is blocked: Try downloading the video manually and use a direct URL</em>
+                        🎥 <strong>Supported Input Types:</strong><br>
+                        ✅ <strong>Direct media URLs:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
+                        ⚠️ <strong>YouTube URLs:</strong> Limited support due to restrictions<br>
+                        💡 <em>For best results: Use direct media URLs or download YouTube videos manually</em><br>
+                        🔄 <em>YouTube workaround: Download → Upload to cloud storage → Use direct link</em>
                     </small>
                 </div>
 
@@ -807,11 +807,12 @@ def transcribe():
                 
                 if 'blocking automated access' in error_message:
                     suggestions = [
-                        '🔄 <strong>Workaround:</strong> Download the video manually using a YouTube downloader tool',
-                        '📤 <strong>Then:</strong> Upload the audio file to a cloud storage service (Google Drive, Dropbox, etc.)',
-                        '🔗 <strong>Finally:</strong> Use the direct download link from cloud storage in this app',
-                        '🎯 <strong>Alternative:</strong> Try a different YouTube video that might not be blocked',
-                        '💡 <strong>Tip:</strong> Popular videos with many views are less likely to be blocked'
+                        '🚫 <strong>YouTube is blocking automated access to this video</strong>',
+                        '📥 <strong>Solution 1:</strong> Download the video manually using yt-dlp, 4K Video Downloader, or similar',
+                        '☁️ <strong>Solution 2:</strong> Upload the audio file to Google Drive, Dropbox, or OneDrive',
+                        '🔗 <strong>Solution 3:</strong> Get the direct download link and paste it here',
+                        '🎯 <strong>Alternative:</strong> Try a different video or use a direct media URL',
+                        '💡 <strong>Note:</strong> This is a YouTube restriction, not an app limitation'
                     ]
                 
                 return jsonify({
