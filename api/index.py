@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, send_file
 import os
+import time
 import markdown
 import assemblyai as aai
 import anthropic
@@ -37,75 +38,84 @@ def ensure_dirs():
     os.makedirs("transcripts", exist_ok=True)
     os.makedirs("summaries", exist_ok=True)
 
-def is_youtube_url(url: str) -> bool:
-    return ("youtube.com" in url) or ("youtu.be" in url)
+def safe_id_from(url_or_id: str) -> str:
+    base = (url_or_id or "").strip() or str(uuid.uuid4())
+    base = base.split("?")[0].split("#")[0]
+    base = base[-64:]  # trim long names
+    return base or str(uuid.uuid4())
 
-def fetch_youtube_captions_text(video_url: str, languages=("en", "en-US", "en-GB")) -> str | None:
-    vid = extract_video_id(video_url)
-    if not vid:
-        print(f"No video ID found for: {video_url}")
-        return None
-    try:
-        print(f"Attempting to fetch captions for video ID: {vid}")
-        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        text = "\n".join([item.get("text","") for item in transcript_list]).strip()
-        print(f"Successfully fetched captions: {len(text)} characters")
-        return text or None
-    except (TranscriptsDisabled, NoTranscriptFound) as e:
-        print(f"No captions available: {e}")
-        return None
-    except Exception as e:
-        print(f"Error fetching captions: {e}")
-        return None
-
-def transcribe_direct_media_url(media_url: str) -> str:
+def transcribe_with_assemblyai_media_url(media_url: str, poll_secs: float = 2.5, max_wait: int = 600):
     if not ASSEMBLYAI_API_KEY:
-        raise RuntimeError("ASSEMBLYAI_API_KEY not set")
-    tx = aai.Transcriber().transcribe(media_url)
-    while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
-        tx = aai.Transcriber().get_transcript(tx.id)
-    if tx.status == aai.TranscriptStatus.error:
-        raise RuntimeError(f"Transcription failed: {tx.error}")
-    return tx.text or ""
+        return None, "ASSEMBLYAI_API_KEY not set"
+    try:
+        tx = aai.Transcriber().transcribe(media_url)
+    except Exception as e:
+        return None, f"AssemblyAI submit error: {e}"
 
-def summarize_text_with_anthropic(text: str, summary_format: str = "bullet_points") -> str:
+    waited = 0
+    while True:
+        try:
+            tx = aai.Transcriber().get_transcript(tx.id)
+        except Exception as e:
+            return None, f"AssemblyAI poll error: {e}"
+        if tx.status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
+            break
+        time.sleep(poll_secs)
+        waited += poll_secs
+        if waited > max_wait:
+            return None, "AssemblyAI timed out while polling"
+
+    if tx.status == aai.TranscriptStatus.error:
+        return None, f"AssemblyAI transcription failed: {tx.error}"
+    return (tx.text or "").strip(), None
+
+def summarize_with_anthropic(text: str, summary_format: str = "bullet_points"):
     if not anthropic_client:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
+        return None, "ANTHROPIC_API_KEY not set"
+    if not text:
+        return None, "Empty transcript text; cannot summarize"
 
     templates = {
-        "bullet_points": "Summarize the following transcript in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights, lessons, and practical takeaways. Use short sections with clear headings.\n\nTranscript:\n{t}",
-        "detailed_summary": "Write a detailed, organized summary including: topic/purpose, key points, notable examples, and conclusions/next steps.\n\nTranscript:\n{t}",
+        "bullet_points": "Summarize in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
+        "detailed_summary": "Write a detailed, organized summary: topic, key points, examples, conclusions/next steps.\n\nTranscript:\n{t}",
     }
-    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text)
+    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text[:200000])  # trim huge inputs
 
-    resp = anthropic_client.messages.create(
-        model="claude-3-sonnet-20240229",
-        max_tokens=2500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return resp.content[0].text.strip()
+    try:
+        resp = anthropic_client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=2500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text.strip(), None
+    except Exception as e:
+        return None, f"Anthropic error: {e}"
 
 def write_outputs(base_id: str, transcript_text: str, summary_md: str):
-    ensure_dirs()
-    tx_path = os.path.join("transcripts", f"{base_id}.txt")
-    md_path = os.path.join("summaries", f"{base_id}.md")
-    html_path = os.path.join("summaries", f"{base_id}.html")
+    try:
+        ensure_dirs()
+        tx_path = os.path.join("transcripts", f"{base_id}.txt")
+        md_path = os.path.join("summaries", f"{base_id}.md")
+        html_path = os.path.join("summaries", f"{base_id}.html")
 
-    with open(tx_path, "w", encoding="utf-8") as f:
-        f.write(transcript_text or "")
+        with open(tx_path, "w", encoding="utf-8") as f:
+            f.write(transcript_text or "")
 
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(summary_md or "")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(summary_md or "")
 
-    html_body = markdown.markdown(summary_md or "")
-    full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
+        html_body = markdown.markdown(summary_md or "")
+        full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
 <style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
 </head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(full_html)
 
-    return tx_path, md_path, html_path
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(full_html)
+
+        return tx_path, md_path, html_path, None
+    except Exception as e:
+        return None, None, None, f"Write error: {e}"
 
 @app.route('/')
 def index():
@@ -465,101 +475,76 @@ def test_youtube_captions(video_id):
 @app.route('/process', methods=['POST'])
 def process_video():
     try:
-        data = request.get_json()
+        data = request.get_json(force=True) or {}
         video_url = (data.get('video_url') or '').strip()
         summary_format = data.get('summary_format', 'bullet_points')
 
         if not video_url or not video_url.startswith(('http://', 'https://')):
-            return jsonify({'error': 'Provide a valid http(s) Video/Audio URL'}), 400
+            return jsonify({'success': False, 'error': 'Provide a valid http(s) Video/Audio URL'}), 400
 
-        # Try YouTube captions path first (no downloads, no Tactiq)
-        if is_youtube_url(video_url):
-            print(f"Processing YouTube URL: {video_url}")
-            video_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-            captions = fetch_youtube_captions_text(video_url)
-            print(f"Captions result: {'SUCCESS' if captions else 'FAILED'}")
-            if captions:
-                # Summarize
-                summary_md = summarize_text_with_anthropic(captions, summary_format)
+        # Decide an id for outputs
+        base_id = extract_video_id(video_url) or safe_id_from(video_url)
 
-                # Persist files so your existing /download links work
-                tx_path, md_path, html_path = write_outputs(video_id, captions, summary_md)
+        # Path A: direct media URL (non-YouTube) -> AssemblyAI
+        is_youtube = ('youtube.com' in video_url) or ('youtu.be' in video_url)
+        transcript_text = ""
 
-                # Build download links (reuse your /download endpoint)
-                links = ""
-                if os.path.exists(html_path):
-                    links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a>'
-                if os.path.exists(md_path):
-                    links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a>'
-                if os.path.exists(tx_path):
-                    links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
-
-                # Inline preview
-                formatted = f"""
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
-                    <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;">{captions}</div>
-                    <h3 style="color:#2c3e50;margin:20px 0 12px;">AI Summary ({summary_format.replace('_',' ').title()})</h3>
-                    <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md)}</div>
-                </div>
-                """
-
-                return jsonify({
-                    "success": True,
-                    "transcript": formatted,
-                    "download_links": links,
-                    "message": "Processed via YouTube captions."
-                })
-            # If no captions, we fall through to your existing path below.
-
-        # Choose an ID for file outputs
-        base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-
-        # Direct media URL → AssemblyAI
-        if not ASSEMBLYAI_API_KEY:
+        if not is_youtube:
+            transcript_text, tx_err = transcribe_with_assemblyai_media_url(video_url)
+            if tx_err:
+                return jsonify({'success': False, 'stage': 'transcribe', 'error': tx_err}), 502
+        else:
+            # If you also added a YouTube-captions path earlier, call it here.
+            # For this triage, we'll just return a helpful message instead of 500'ing.
             return jsonify({
-                'error': 'Direct media transcription requires ASSEMBLYAI_API_KEY.',
+                'success': False,
+                'stage': 'transcribe',
+                'error': 'YouTube URL received but this instance is configured for direct media URLs only.',
                 'suggestions': [
-                    'Set ASSEMBLYAI_API_KEY or use a YouTube link that has captions.'
+                    'Paste a direct MP4/MP3/WAV URL',
+                    'Or enable the captions path for YouTube links in the server (recommended)'
                 ]
-            }), 500
-        transcript_text = transcribe_direct_media_url(video_url)
+            }), 400
 
         # Summarize
-        summary_md = summarize_text_with_anthropic(transcript_text, summary_format=summary_format)
+        summary_md, sum_err = summarize_with_anthropic(transcript_text, summary_format)
+        if sum_err:
+            return jsonify({'success': False, 'stage': 'summarize', 'error': sum_err}), 502
 
-        # Persist outputs for download links
-        tx_path, md_path, html_path = write_outputs(base_id, transcript_text, summary_md)
+        # Persist
+        tx_path, md_path, html_path, write_err = write_outputs(base_id, transcript_text, summary_md)
+        if write_err:
+            return jsonify({'success': False, 'stage': 'write', 'error': write_err}), 500
 
-        # Build download links (reuse your existing /download endpoint)
+        # Links
         links = ""
-        if os.path.exists(html_path):
+        if html_path and os.path.exists(html_path):
             links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a>'
-        if os.path.exists(md_path):
+        if md_path and os.path.exists(md_path):
             links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a>'
-        if os.path.exists(tx_path):
+        if tx_path and os.path.exists(tx_path):
             links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
 
-        # Inline display
-        formatted_content = f"""
+        # Inline preview
+        preview_html = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Transcript</h3>
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{(transcript_text or '')}</div>
-
-            <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({summary_format.replace('_', ' ').title()})</h3>
-            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+            <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
+            <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{(transcript_text or '')}</div>
+            <h3 style="color:#2c3e50;margin:20px 0 12px;">AI Summary ({summary_format.replace('_',' ').title()})</h3>
+            <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
         </div>
         """
 
         return jsonify({
             'success': True,
-            'transcript': formatted_content,
+            'transcript': preview_html,
             'download_links': links,
-            'message': 'Processed successfully.'
+            'message': 'Processed.'
         })
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Final catch-all; surface the message so you can see it in the UI
+        return jsonify({'success': False, 'stage': 'unknown', 'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
