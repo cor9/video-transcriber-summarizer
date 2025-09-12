@@ -3,14 +3,14 @@
   "name": "vidscribe2ai",
   "builds": [
     {
-      "src": "test_app.py",
+      "src": "api/index.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "test_app.py"
+      "dest": "api/index.py"
     }
   ],
   "env": {
