@@ -99,6 +99,34 @@ def vtt_to_text(vtt: str) -> str:
         out.append(l)
     return "\n".join(out).strip()
 
+def clean_paste(text: str) -> str:
+    """Clean pasted text by removing Tactiq metadata and timestamps"""
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+            
+        # strip tactiq headers/URLs
+        if line.lower().startswith("tactiq.io"):
+            continue
+        if line.lower().startswith("no title found"):
+            continue
+        if "youtube.com/watch" in line.lower():
+            continue
+            
+        # strip timecodes like 00:00:00.000
+        if line.startswith("00:"):
+            # drop just the timestamp, keep words
+            parts = line.split(" ", 2)
+            if len(parts) >= 3:
+                line = parts[2]
+            else:
+                continue
+                
+        lines.append(line)
+    return "\n".join(lines).strip()
+
 @app.route('/')
 def index():
     # Return the HTML directly instead of using templates
@@ -515,14 +543,16 @@ def process_video():
 
         # Paste mode
         if mode == 'paste' or raw_transcript:
-            if len(raw_transcript) < 20:
-                return jsonify({'success': False, 'error': 'Please paste a transcript (≥ 20 chars).'}), 400
+            # Clean the pasted text to remove Tactiq metadata
+            cleaned_text = clean_paste(raw_transcript)
+            if len(cleaned_text) < 50:
+                return jsonify({'success': False, 'error': 'Transcript paste didn\'t have usable text after cleaning.'}), 400
             base_id = str(uuid.uuid4())[:8]
-            summary_md = summarize_with_gemini(raw_transcript, summary_format)
-            download_content = generate_download_content(base_id, raw_transcript, summary_md)
+            summary_md = summarize_with_gemini(cleaned_text, summary_format)
+            download_content = generate_download_content(base_id, cleaned_text, summary_md)
 
             # Generate download links with data URLs for serverless environment
-            transcript_data = f"data:text/plain;charset=utf-8,{quote(raw_transcript)}"
+            transcript_data = f"data:text/plain;charset=utf-8,{quote(cleaned_text)}"
             markdown_data = f"data:text/markdown;charset=utf-8,{quote(summary_md)}"
             html_data = f"data:text/html;charset=utf-8,{quote(download_content['html'])}"
             
@@ -532,8 +562,8 @@ def process_video():
 
             body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-              <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
-              <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{raw_transcript}</div>
+              <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (cleaned)</h3>
+              <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{cleaned_text}</div>
               <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
               <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
             </div>
