@@ -341,12 +341,28 @@ def format_output(summary_text, format_type="html"):
 def index():
     return render_template('index.html')
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_file('../favicon.ico')
+
+@app.route('/sitelogo.svg')
+def sitelogo():
+    return send_file('../sitelogo.svg')
+
+@app.route('/title.svg')
+def title():
+    return send_file('../title.svg')
+
+@app.route('/logoimage.svg')
+def logoimage():
+    return send_file('../logoimage.svg')
+
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files"""
     if filename.endswith(('.svg', '.ico', '.png', '.jpg', '.jpeg', '.gif', '.css', '.js')):
         try:
-            return send_file(filename)
+            return send_file(f'../{filename}')
         except FileNotFoundError:
             return "File not found", 404
     else:
