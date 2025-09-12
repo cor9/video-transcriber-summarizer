@@ -109,7 +109,19 @@ def fetch_fallback_ytdlp(video_url: str):
             _info = ydl.extract_info(video_url, download=False)
             ydl.download([video_url])
     except Exception as e:
-        return None, {"path": "yt_dlp", "reason": f"extract_or_download:{e}"}
+        # Clean up temp directory on error
+        try:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+        except:
+            pass
+        error_msg = str(e)
+        if "no element found" in error_msg or "XML" in error_msg:
+            print(f"[YTDLP] XML parsing error: {error_msg}")
+            return None, {"path": "yt_dlp", "reason": f"xml_parse_error:{error_msg}"}
+        else:
+            print(f"[YTDLP] General error: {error_msg}")
+            return None, {"path": "yt_dlp", "reason": f"extract_or_download:{error_msg}"}
 
     # Read any .srt in tmp
     vid = extract_video_id(video_url) or ""
@@ -128,7 +140,15 @@ def fetch_fallback_ytdlp(video_url: str):
                     text = "\n".join(lines).strip() or None
                     if text: break
     except Exception as e:
+        print(f"[YTDLP] SRT parsing error: {e}")
         return None, {"path": "yt_dlp", "reason": f"read_srt:{e}"}
+    finally:
+        # Clean up temp directory
+        try:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+        except:
+            pass
 
     return (text, {"path": "yt_dlp"}) if text else (None, {"path": "yt_dlp", "reason": "no_srt"})
 
