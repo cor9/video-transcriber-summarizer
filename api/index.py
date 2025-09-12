@@ -1,117 +1,84 @@
-import os, re, uuid, requests, markdown
+import os, re, uuid, markdown
 from flask import Flask, request, jsonify
-from googleapiclient.discovery import build
 import google.generativeai as genai
+from urllib.parse import urlparse, parse_qs, quote
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
-# --- ENV
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
 app = Flask(__name__)
 
-# --- Gemini init (lazy-safe)
 def get_gemini(model="gemini-1.5-flash"):
     if not GOOGLE_API_KEY:
         return None
     genai.configure(api_key=GOOGLE_API_KEY)
     return genai.GenerativeModel(model)
 
-
-# --- YouTube utils
-_YT_ID_RE = re.compile(r'(?:v=|/)([0-9A-Za-z_-]{11})')
-
+# ---- robust video-id extraction
 def extract_video_id(url: str) -> str | None:
-    m = _YT_ID_RE.search(url)
-    if m:
-        return m.group(1)
-    if "youtu.be/" in url:
-        return url.rstrip('/').split('/')[-1][:11]
+    try:
+        u = urlparse(url)
+        host = (u.netloc or "").lower()
+        path = u.path or ""
+        qs = parse_qs(u.query)
+
+        # Standard watch
+        if "v" in qs and qs["v"]:
+            return qs["v"][0][:11]
+
+        # youtu.be short links
+        if "youtu.be" in host:
+            seg = path.strip("/").split("/")[0]
+            return seg[:11] if seg else None
+
+        # /embed/VIDEOID or /v/VIDEOID
+        m = re.search(r"/(?:embed|v)/([0-9A-Za-z_-]{11})", path)
+        if m:
+            return m.group(1)
+
+        # /shorts/VIDEOID
+        m = re.search(r"/shorts/([0-9A-Za-z_-]{11})", path)
+        if m:
+            return m.group(1)
+
+        # Fallback: any 11-char ID in path
+        m = re.search(r"([0-9A-Za-z_-]{11})", path)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
     return None
 
 def is_youtube_url(url: str) -> bool:
-    return "youtube.com" in url or "youtu.be" in url
+    return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
-def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en","en-US","en-GB")) -> str | None:
-    """Official YouTube Data API: pick best caption track, download SRT, strip to plain text."""
-    if not YOUTUBE_API_KEY:
-        return None
-    vid = extract_video_id(youtube_url)
+# ---- captions via youtube-transcript-api (public/auto captions)
+def fetch_youtube_captions_text(video_url: str, languages=("en","en-US","en-GB")) -> str | None:
+    vid = extract_video_id(video_url)
     if not vid:
         return None
-
-    service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-    tracks = service.captions().list(part="id,snippet", videoId=vid).execute()
-    items = tracks.get("items", [])
-    if not items:
+    try:
+        entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
+        # join lines; strip timing/indices (not present here)
+        return "\n".join(e.get("text","") for e in entries if e.get("text")).strip() or None
+    except (TranscriptsDisabled, NoTranscriptFound):
+        return None
+    except Exception:
+        # age-restricted, members-only, region-locked, or live with no captions yet
         return None
 
-    # choose a track by language priority
-    def score(it):
-        lang = (it["snippet"].get("language") or "").lower()
-        try: return lang_priority.index(lang)
-        except ValueError: return len(lang_priority)+1
-    items.sort(key=score)
-    caption_id = items[0]["id"]
-
-    # download SRT
-    dl = f"https://www.googleapis.com/youtube/v3/captions/{caption_id}?tfmt=srt&key={YOUTUBE_API_KEY}"
-    r = requests.get(dl, timeout=30)
-    if r.status_code != 200 or not r.text.strip():
-        return None
-
-    # strip SRT → text
-    lines = []
-    for line in r.text.splitlines():
-        line = line.strip()
-        if not line:       continue
-        if line.isdigit(): continue
-        if "-->" in line:  continue
-        lines.append(line)
-    return "\n".join(lines).strip() or None
-
-# --- Summarization (Gemini with graceful fallback)
 def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
     model = get_gemini("gemini-1.5-flash")
     if not model:
-        return local_summary(text, summary_format)
-
+        return text[:1200]  # minimal fallback (no key)
     prompts = {
-        "bullet_points": """Summarize the transcript in crisp bullet points. Focus on key ideas and actionable takeaways.
-
-Transcript:
-{t}""",
-        "key_insights": """Extract the most important insights, lessons, and actionable takeaways using short sections with clear headings.
-
-Transcript:
-{t}""",
-        "detailed_summary": """Write a clear, well-structured detailed summary covering:
-1) Topic & purpose
-2) Key points
-3) Notable examples/details
-4) Conclusions or next steps
-
-Transcript:
-{t}""",
+        "bullet_points": "Summarize in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
+        "detailed_summary": "Write a clear, structured summary: topic/purpose, key points, notable examples, conclusions/next steps.\n\nTranscript:\n{t}",
     }
     prompt = prompts.get(summary_format, prompts["bullet_points"]).format(t=text[:200_000])
     resp = model.generate_content(prompt)
     return (resp.text or "").strip()
-
-# dumb but serviceable local fallback
-from collections import Counter
-def local_summary(text: str, summary_format: str="bullet_points") -> str:
-    import re
-    sents = re.split(r'(?<=[.!?])\s+', text)
-    words = re.findall(r"[A-Za-z][A-Za-z'\-]+", text.lower())
-    stop = set("""a an the and or but if to of in on for with as by at from is are was were be been being you your i we they he she it this that those these not can will just""".split())
-    freq = Counter(w for w in words if w not in stop and len(w) > 2)
-    def score(sent):
-        sw = re.findall(r"[A-Za-z][A-Za-z'\-]+", sent.lower())
-        return sum(freq.get(w, 0) for w in sw) / (len(sw) + 1)
-    top = [s.strip() for s in sorted(sents, key=score, reverse=True)[:10] if s.strip()]
-    if summary_format == "detailed_summary":
-        return "\n\n".join(top)
-    return "\n".join(f"- {t}" for t in top[:8])
 
 def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
     """Generate download content for serverless environment (no file writing)"""
@@ -433,10 +400,8 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY")),
-        'version': '4.0.0-google-ecosystem'
+        'version': '4.1.0-youtube-transcript-api'
     })
-
 
 @app.route('/process', methods=['POST'])
 def process_video():
@@ -447,7 +412,7 @@ def process_video():
         raw_transcript = (data.get('raw_transcript') or '').strip()
         summary_format = data.get('summary_format', 'bullet_points')
 
-        # 1) Paste mode (no external calls)
+        # Paste mode
         if mode == 'paste' or raw_transcript:
             if len(raw_transcript) < 20:
                 return jsonify({'success': False, 'error': 'Please paste a transcript (≥ 20 chars).'}), 400
@@ -456,13 +421,14 @@ def process_video():
             download_content = generate_download_content(base_id, raw_transcript, summary_md)
 
             # Generate download links with data URLs for serverless environment
-            transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(raw_transcript)}"
-            markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
-            html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+            transcript_data = f"data:text/plain;charset=utf-8,{quote(raw_transcript)}"
+            markdown_data = f"data:text/markdown;charset=utf-8,{quote(summary_md)}"
+            html_data = f"data:text/html;charset=utf-8,{quote(download_content['html'])}"
             
             links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
             links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
             links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
+
             body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
               <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
@@ -473,23 +439,19 @@ def process_video():
             """
             return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed pasted transcript.'})
 
-        # 2) YouTube + captions path
+        # YouTube mode
         if not video_url or not video_url.startswith(('http://','https://')):
             return jsonify({'success': False, 'error': 'Provide a valid http(s) URL'}), 400
         if not is_youtube_url(video_url):
-            return jsonify({
-                'success': False,
-                'error': 'This instance supports YouTube links (captions) or Paste mode.',
-                'suggestions': ['Switch to Paste mode and drop your transcript text.']
-            }), 400
+            return jsonify({'success': False, 'error': 'Use a YouTube link or switch to Paste mode.'}), 400
 
         base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
         text = fetch_youtube_captions_text(video_url)
         if not text:
             return jsonify({
                 'success': False,
-                'error': 'No captions found for this video.',
-                'why': 'Captions disabled, private/members-only, age-restricted, or not generated yet.',
+                'error': 'No captions found or not accessible for this video.',
+                'why': 'Captions may be disabled, private/members-only, age-restricted, region-locked, or not generated yet.',
                 'fixes': ['Try a different video with captions', 'Use Paste mode with your own transcript']
             }), 404
 
@@ -497,9 +459,9 @@ def process_video():
         download_content = generate_download_content(base_id, text, summary_md)
 
         # Generate download links with data URLs for serverless environment
-        transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(text)}"
-        markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
-        html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+        transcript_data = f"data:text/plain;charset=utf-8,{quote(text)}"
+        markdown_data = f"data:text/markdown;charset=utf-8,{quote(summary_md)}"
+        html_data = f"data:text/html;charset=utf-8,{quote(download_content['html'])}"
         
         links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
         links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
