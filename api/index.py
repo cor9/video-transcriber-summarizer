@@ -1,5 +1,5 @@
 import os, re, uuid, requests, markdown
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from googleapiclient.discovery import build
 import google.generativeai as genai
 
@@ -16,9 +16,6 @@ def get_gemini(model="gemini-1.5-flash"):
     genai.configure(api_key=GOOGLE_API_KEY)
     return genai.GenerativeModel(model)
 
-def ensure_dirs():
-    os.makedirs("transcripts", exist_ok=True)
-    os.makedirs("summaries", exist_ok=True)
 
 # --- YouTube utils
 _YT_ID_RE = re.compile(r'(?:v=|/)([0-9A-Za-z_-]{11})')
@@ -116,22 +113,18 @@ def local_summary(text: str, summary_format: str="bullet_points") -> str:
         return "\n\n".join(top)
     return "\n".join(f"- {t}" for t in top[:8])
 
-def write_outputs(base_id: str, transcript_text: str, summary_md: str):
-    ensure_dirs()
-    tx_path  = os.path.join("transcripts", f"{base_id}.txt")
-    md_path  = os.path.join("summaries",  f"{base_id}.md")
-    html_path= os.path.join("summaries",  f"{base_id}.html")
-
-    with open(tx_path, "w", encoding="utf-8") as f:  f.write(transcript_text or "")
-    with open(md_path, "w", encoding="utf-8") as f:  f.write(summary_md or "")
-
+def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
+    """Generate download content for serverless environment (no file writing)"""
     html_body = markdown.markdown(summary_md or "")
     full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
 <style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
 </head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
-    with open(html_path, "w", encoding="utf-8") as f: f.write(full_html)
-
-    return tx_path, md_path, html_path
+    
+    return {
+        'transcript': transcript_text or "",
+        'markdown': summary_md or "",
+        'html': full_html
+    }
 
 @app.route('/')
 def index():
@@ -444,39 +437,6 @@ def health():
         'version': '4.0.0-google-ecosystem'
     })
 
-@app.route('/download/<filename>')
-def download_file(filename):
-    """Download generated HTML, MD, or TXT files"""
-    try:
-        # Check in both transcripts and summaries directories
-        possible_paths = [
-            os.path.join("transcripts", filename),
-            os.path.join("summaries", filename)
-        ]
-        
-        file_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                file_path = path
-                break
-        
-        if not file_path:
-            return jsonify({'error': 'File not found'}), 404
-        
-        # Determine MIME type based on file extension
-        if filename.endswith('.html'):
-            mimetype = 'text/html'
-        elif filename.endswith('.md'):
-            mimetype = 'text/markdown'
-        elif filename.endswith('.txt'):
-            mimetype = 'text/plain'
-        else:
-            mimetype = 'application/octet-stream'
-        
-        return send_file(file_path, as_attachment=True, download_name=filename, mimetype=mimetype)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/process', methods=['POST'])
 def process_video():
@@ -493,11 +453,16 @@ def process_video():
                 return jsonify({'success': False, 'error': 'Please paste a transcript (≥ 20 chars).'}), 400
             base_id = str(uuid.uuid4())[:8]
             summary_md = summarize_with_gemini(raw_transcript, summary_format)
-            tx_path, md_path, html_path = write_outputs(base_id, raw_transcript, summary_md)
-            links = ""
-            if os.path.exists(html_path): links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
-            if os.path.exists(md_path):   links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
-            if os.path.exists(tx_path):   links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+            download_content = generate_download_content(base_id, raw_transcript, summary_md)
+
+            # Generate download links with data URLs for serverless environment
+            transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(raw_transcript)}"
+            markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
+            html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+            
+            links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
+            links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
+            links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
             body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
               <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
@@ -529,11 +494,16 @@ def process_video():
             }), 404
 
         summary_md = summarize_with_gemini(text, summary_format)
-        tx_path, md_path, html_path = write_outputs(base_id, text, summary_md)
-        links = ""
-        if os.path.exists(html_path): links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
-        if os.path.exists(md_path):   links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
-        if os.path.exists(tx_path):   links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+        download_content = generate_download_content(base_id, text, summary_md)
+
+        # Generate download links with data URLs for serverless environment
+        transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(text)}"
+        markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
+        html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+        
+        links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
+        links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
+        links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
         body = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
