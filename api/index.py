@@ -12,6 +12,9 @@ import requests
 from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 
+# Test import
+print("✅ All imports successful")
+
 app = Flask(__name__)
 
 # API Configuration
