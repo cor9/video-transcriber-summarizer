@@ -64,11 +64,31 @@ Transcript:
 """
 }
 
+def validate_video_url(url):
+    """
+    Validate that the URL is a direct link to a video/audio file
+    """
+    # Check if it's a YouTube URL
+    if 'youtube.com' in url or 'youtu.be' in url:
+        raise ValueError("YouTube URLs are not supported. Please provide a direct link to a video or audio file (MP4, MP3, WAV, etc.).")
+    
+    # Check if it's a direct media file
+    supported_extensions = ['.mp4', '.mp3', '.wav', '.m4a', '.webm', '.ogg', '.flac', '.aac']
+    if not any(url.lower().endswith(ext) for ext in supported_extensions):
+        # Check if URL contains media file patterns
+        if not any(pattern in url.lower() for pattern in ['/video/', '/audio/', '.mp4', '.mp3', '.wav', '.m4a']):
+            raise ValueError("Please provide a direct link to a video or audio file. Supported formats: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC")
+    
+    return True
+
 def handle_transcribe_request(video_url):
     """
     Transcribe video using AssemblyAI API
     """
     try:
+        # Validate the URL first
+        validate_video_url(video_url)
+        
         # Create a transcriber
         transcriber = aai.Transcriber()
         
