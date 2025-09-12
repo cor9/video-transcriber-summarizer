@@ -386,15 +386,14 @@ def index():
             document.getElementById('error').style.display = 'none';
             
             try {
-                const response = await fetch('/transcribe', {
+                const response = await fetch('/process', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
                         video_url: videoUrl,
-                        prompt_choice: summaryFormat,
-                        output_format: 'html'
+                        summary_format: summaryFormat
                     })
                 });
                 
@@ -403,6 +402,10 @@ def index():
                 if (data.success) {
                     // Show results
                     document.getElementById('transcriptContent').innerHTML = data.transcript;
+                    // Add download links if available
+                    if (data.download_links) {
+                        document.getElementById('transcriptContent').innerHTML += '<div style="margin-top: 20px; text-align: center;">' + data.download_links + '</div>';
+                    }
                     document.getElementById('results').style.display = 'block';
                 } else {
                     // Handle structured error responses
