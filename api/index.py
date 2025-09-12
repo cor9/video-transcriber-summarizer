@@ -57,7 +57,7 @@ def summarize_with_anthropic(text: str, summary_format: str = "bullet_points") -
     }
     prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text[:200000])
     resp = anthropic_client.messages.create(
-        model="claude-3-sonnet-20240229",
+        model="claude-3-5-sonnet-20241022",
         max_tokens=2500,
         messages=[{"role": "user", "content": prompt}],
     )
