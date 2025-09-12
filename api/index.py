@@ -400,7 +400,7 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.1.0-youtube-transcript-api'
+        'version': '4.1.1-clean-deployment'
     })
 
 @app.route('/process', methods=['POST'])
