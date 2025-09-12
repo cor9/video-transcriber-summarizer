@@ -53,12 +53,15 @@ def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en", "en-US", 
     """
     vid = extract_youtube_video_id(youtube_url)
     if not vid:
+        print(f"No video ID found for: {youtube_url}")
         return None
 
     try:
+        print(f"Attempting to fetch captions for video ID: {vid}")
         # Use youtube-transcript-api which doesn't require OAuth2
         api = YouTubeTranscriptApi()
         transcript_list = api.list(vid)
+        print(f"Found transcript list with {len(list(transcript_list))} transcripts")
         
         # Try to get transcript in preferred language order
         for lang in lang_priority:
@@ -67,6 +70,7 @@ def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en", "en-US", 
                 transcript_data = transcript.fetch()
                 # Convert to plain text
                 text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+                print(f"Successfully fetched captions for language: {lang}, length: {len(text)}")
                 return text.strip() if text.strip() else None
             except:
                 continue
