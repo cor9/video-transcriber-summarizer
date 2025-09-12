@@ -73,10 +73,7 @@ def transcribe_via_url(media_url: str, poll_secs: float = 2.5, max_wait: int = 6
     return (text or "").strip(), None
 
 def upload_to_aai(source_url: str, chunk_size=5 * 1024 * 1024):
-    """
-    Streams bytes from source_url -> AAI /upload.
-    Returns (upload_url, err).
-    """
+    """Streams bytes from source_url -> AAI /upload. Returns (upload_url, err)."""
     if not ASSEMBLYAI_API_KEY:
         return None, "ASSEMBLYAI_API_KEY not set"
     headers = {"authorization": ASSEMBLYAI_API_KEY}
@@ -84,34 +81,28 @@ def upload_to_aai(source_url: str, chunk_size=5 * 1024 * 1024):
         with httpx.stream("GET", source_url, follow_redirects=True, timeout=60) as r:
             if r.status_code >= 400:
                 return None, f"Source GET {r.status_code} from upstream"
+            last = None
             with httpx.Client(timeout=60) as client:
-                upload_url = "https://api.assemblyai.com/v2/upload"
-                # chunked re-upload
-                # AAI supports chunked upload via multiple POSTs appending bytes
-                # Simplify: read into memory only if small; else stream chunks.
-                # Here: stream chunks.
                 for chunk in r.iter_bytes(chunk_size):
-                    resp = client.post(upload_url, headers=headers, content=chunk)
-                    if resp.status_code >= 400:
-                        return None, f"AAI upload error {resp.status_code}: {resp.text[:200]}"
-                # When chunked uploads finish, the last response body contains the upload_url
-                final = resp.json()
-                return final.get("upload_url"), None
+                    last = client.post("https://api.assemblyai.com/v2/upload",
+                                       headers=headers, content=chunk)
+                    if last.status_code >= 400:
+                        return None, f"AAI upload error {last.status_code}: {last.text[:200]}"
+            return last.json().get("upload_url"), None
     except Exception as e:
         return None, f"Upload pipeline error: {e}"
 
 def transcribe_via_upload(source_url: str, poll_secs: float = 2.5, max_wait: int = 600):
     """Use AAI upload endpoint, then transcribe the returned upload_url."""
     up_url, up_err = upload_to_aai(source_url)
-    if up_err:
+    if up_err: 
         return None, f"AssemblyAI upload pipeline failed: {up_err}"
     try:
         tx = aai.Transcriber().transcribe(up_url)
         job_id = getattr(tx, "id", None)
-        print(f"[AAI:upload] submitted id={job_id} up_url={up_url}")
+        print(f"[AAI:upload] submitted id={job_id}")
     except Exception as e:
         return None, f"AssemblyAI submit error (upload): {e}"
-
     waited = 0.0
     while True:
         try:
@@ -152,18 +143,20 @@ def summarize_with_anthropic(text: str, summary_format: str = "bullet_points"):
     except Exception as e:
         return None, f"Anthropic error: {e}"
 
-def fetch_youtube_captions_text(video_url: str, languages=("en", "en-US", "en-GB")):
-    vid = extract_video_id(video_url)
-    if not vid:
-        return None, "No video ID found in URL"
+def is_youtube_url(u: str) -> bool:
+    return "youtube.com" in u or "youtu.be" in u
+
+def fetch_youtube_captions_text(url: str, languages=("en","en-US","en-GB")) -> str | None:
+    vid = extract_video_id(url)
+    if not vid: 
+        return None
     try:
-        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        text = "\n".join([item.get("text","") for item in transcript_list]).strip()
-        return text or None, None
+        items = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
+        return "\n".join([i.get("text","") for i in items]).strip() or None
     except (TranscriptsDisabled, NoTranscriptFound):
-        return None, "No captions available for this video"
-    except Exception as e:
-        return None, f"Error fetching captions: {e}"
+        return None
+    except Exception:
+        return None
 
 def write_outputs(base_id: str, transcript_text: str, summary_md: str):
     try:
@@ -472,7 +465,7 @@ def health():
         'assemblyai_configured': bool(os.getenv("ASSEMBLYAI_API_KEY")),
         'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
         'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY")),
-        'version': '2.3.0-upload-fallback'
+        'version': '2.4.0-bulletproof-fallback'
     })
 
 @app.route('/download/<filename>')
@@ -522,18 +515,16 @@ def process_video():
 
         base_id = extract_video_id(video_url) or safe_id_from(video_url)
 
-        # Check if it's YouTube - if so, try captions first
-        is_youtube = ('youtube.com' in video_url) or ('youtu.be' in video_url)
-        transcript_text = ""
-
-        if is_youtube:
-            # YouTube captions path
-            transcript_text, tx_err = fetch_youtube_captions_text(video_url)
-            if tx_err:
+        # YouTube captions path (fastest, no downloads)
+        if is_youtube_url(video_url):
+            captions = fetch_youtube_captions_text(video_url)
+            if captions:
+                transcript_text = captions
+            else:
                 return jsonify({
                     'success': False,
                     'stage': 'transcribe',
-                    'error': f'YouTube captions failed: {tx_err}',
+                    'error': 'YouTube captions failed: No captions available for this video',
                     'suggestions': [
                         'Use a direct media URL (MP4/MP3/WAV/etc.)',
                         'Or upload the audio/video to your cloud storage and paste the direct link',
@@ -545,9 +536,9 @@ def process_video():
             # Direct media URL path with upload fallback
             text, err = transcribe_via_url(video_url)
             if err:
-                # If it smells like a retrieval/403/preview problem, try upload fallback
-                retrievable_hints = ("Could not retrieve", "403", "404", "Too many redirects", "unsupported", "retrieve file", "forbidden", "not accessible", "timeout", "Download error", "unable to download")
-                if any(h.lower() in err.lower() for h in retrievable_hints):
+                # Only fallback on retrieval-ish errors
+                hints = ("retrieve", "403", "404", "redirect", "forbidden", "not accessible", "timeout", "unsupported")
+                if any(h in err.lower() for h in hints):
                     print(f"[FALLBACK] Direct URL failed with: {err}")
                     print(f"[FALLBACK] Attempting upload fallback for: {video_url}")
                     text, err = transcribe_via_upload(video_url)
