@@ -1,15 +1,9 @@
 import os, re, uuid, markdown, tempfile, json
 from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
-from youtube_transcript_api import (
-    YouTubeTranscriptApi,
-    TranscriptsDisabled,
-    NoTranscriptFound,
-    CouldNotRetrieveTranscript,
-    VideoUnavailable,
-    TooManyRequests
-)
+from captions import get_captions
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
@@ -21,211 +15,8 @@ def get_gemini(model="gemini-1.5-flash"):
     genai.configure(api_key=GOOGLE_API_KEY)
     return genai.GenerativeModel(model)
 
-# ---- robust video-id extraction
-def extract_video_id(url: str) -> str | None:
-    try:
-        u = urlparse(url)
-        host = (u.netloc or "").lower()
-        path = u.path or ""
-        qs = parse_qs(u.query)
-
-        # Standard watch
-        if "v" in qs and qs["v"]:
-            return qs["v"][0][:11]
-
-        # youtu.be short links
-        if "youtu.be" in host:
-            seg = path.strip("/").split("/")[0]
-            return seg[:11] if seg else None
-
-        # /embed/VIDEOID or /v/VIDEOID
-        m = re.search(r"/(?:embed|v)/([0-9A-Za-z_-]{11})", path)
-        if m:
-            return m.group(1)
-
-        # /shorts/VIDEOID
-        m = re.search(r"/shorts/([0-9A-Za-z_-]{11})", path)
-        if m:
-            return m.group(1)
-
-        # Fallback: any 11-char ID in path
-        m = re.search(r"([0-9A-Za-z_-]{11})", path)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return None
-
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
-
-# ---------- PRIMARY: robust youtube-transcript-api pull ----------
-def fetch_captions_primary(video_url: str,
-                           prefer_langs=("en","en-US","en-GB"),
-                           fallback_translate_to="en"):
-    vid = extract_video_id(video_url)
-    diag = {"video_id": vid, "step": None, "chosen": None, "langs_found": [], "generated": None, "translated": False}
-    if not vid:
-        return None, {**diag, "reason":"no_video_id"}
-
-    # Step 1: direct preferred
-    try:
-        diag["step"] = "direct_preferred"
-        entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(prefer_langs))
-        text = "\n".join(e.get("text","") for e in entries if e.get("text")).strip() or None
-        if text:
-            diag["chosen"] = "preferred_direct"
-            return text, diag
-    except (NoTranscriptFound, TranscriptsDisabled):
-        pass
-    except Exception as e:
-        diag["direct_error"] = str(e)
-
-    # Step 2: list & choose
-    try:
-        diag["step"] = "list_transcripts"
-        tlist = YouTubeTranscriptApi.list_transcripts(vid)
-        for t in tlist:
-            diag["langs_found"].append({
-                "language": t.language_code,
-                "is_generated": t.is_generated,
-                "is_translatable": t.is_translatable
-            })
-
-        def rank(t):
-            try:
-                pref_index = list(prefer_langs).index(t.language_code)
-            except ValueError:
-                pref_index = len(prefer_langs) + 1
-            manual_bonus = 0 if not t.is_generated else 1
-            return (pref_index, manual_bonus)
-
-        cands = sorted(list(tlist), key=rank)
-
-        # 2a) same-language
-        for c in cands:
-            if c.language_code in prefer_langs:
-                txt = "\n".join(x.get("text","") for x in c.fetch() if x.get("text")).strip() or None
-                if txt:
-                    diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
-                    diag["generated"] = c.is_generated
-                    return txt, diag
-
-        # 2b) translate if allowed
-        if fallback_translate_to:
-            for c in cands:
-                if getattr(c, "is_translatable", False):
-                    try:
-                        t = c.translate(fallback_translate_to).fetch()
-                        txt = "\n".join(x.get("text","") for x in t if x.get("text")).strip() or None
-                        if txt:
-                            diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
-                            diag["generated"] = c.is_generated
-                            diag["translated"] = True
-                            return txt, diag
-                    except Exception as te:
-                        diag.setdefault("translate_errors", []).append(str(te))
-
-        # 2c) any manual → any generated
-        any_manual = [t for t in tlist if not t.is_generated]
-        any_generated = [t for t in tlist if t.is_generated]
-        for bucket in (any_manual, any_generated):
-            for c in bucket:
-                try:
-                    txt = "\n".join(x.get("text","") for x in c.fetch() if x.get("text")).strip() or None
-                    if txt:
-                        diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
-                        diag["generated"] = c.is_generated
-                        return txt, diag
-                except Exception as fe:
-                    diag.setdefault("fetch_errors", []).append(str(fe))
-
-        return None, {**diag, "reason":"no_working_track"}
-
-    except TranscriptsDisabled:
-        return None, {**diag, "reason":"captions_disabled"}
-    except NoTranscriptFound:
-        return None, {**diag, "reason":"no_transcripts"}
-    except TooManyRequests:
-        return None, {**diag, "reason":"rate_limited"}
-    except VideoUnavailable:
-        return None, {**diag, "reason":"video_unavailable"}
-    except CouldNotRetrieveTranscript:
-        return None, {**diag, "reason":"retrieve_failed"}
-    except Exception as e:
-        return None, {**diag, "reason":f"unexpected:{e}"}
-
-# ---------- FALLBACK: yt-dlp subtitle pull (no video download) ----------
-def fetch_captions_fallback_ytdlp(video_url: str, prefer_langs=("en","en-US","en-GB")):
-    """
-    Uses yt-dlp to fetch subtitles in SRT without downloading the media.
-    Works on many cases where transcript API fails.
-    """
-    try:
-        import yt_dlp
-    except Exception as e:
-        return None, {"reason": f"yt_dlp_missing:{e}"}
-
-    ytid = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-    tmpdir = tempfile.mkdtemp(prefix="subs_")
-    # allow 'en' and 'en-*', and auto subs
-    sub_langs = ",".join(list(dict.fromkeys(list(prefer_langs)+["en.*","en"])))
-
-    ydl_opts = {
-        "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitlesformat": "srt",
-        "subtitleslangs": [sub_langs],
-        "paths": {"home": tmpdir, "temp": tmpdir},
-        "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            # Force download of only subs
-            ydl.download([video_url])
-    except Exception as e:
-        return None, {"reason": f"yt_dlp_extract:{e}"}
-
-    # Find an SRT in tmpdir
-    srt_text = None
-    try:
-        for fname in os.listdir(tmpdir):
-            if fname.startswith(ytid) and fname.endswith(".srt"):
-                with open(os.path.join(tmpdir, fname), "r", encoding="utf-8", errors="ignore") as f:
-                    srt_text = f.read()
-                break
-    except Exception as e:
-        return None, {"reason": f"read_srt:{e}"}
-
-    if not srt_text:
-        return None, {"reason": "no_srt_output"}
-
-    # SRT → plain text
-    lines = []
-    for line in srt_text.splitlines():
-        line = line.strip()
-        if not line: continue
-        if line.isdigit(): continue
-        if "-->" in line: continue
-        lines.append(line)
-    text = "\n".join(lines).strip() or None
-    return text, {"used": "yt_dlp", "tmpdir": tmpdir}
-
-# ---------- Wrapper: try primary, then fallback ----------
-def fetch_youtube_captions_text(video_url: str):
-    text, diag = fetch_captions_primary(video_url)
-    if text:
-        return text, {**diag, "path": "primary"}
-    # Only fallback if clearly public but primary failed
-    alt, ydiag = fetch_captions_fallback_ytdlp(video_url)
-    if alt:
-        return alt, {"path": "yt_dlp", **ydiag}
-    return None, {"path": "none", "primary": diag, "fallback": ydiag}
 
 def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
     model = get_gemini("gemini-1.5-flash")
@@ -427,9 +218,10 @@ def index():
             <form id="transcribeForm">
                 <div class="form-group">
                     <label>Input Mode</label>
-                    <div style="display:flex; gap:12px; align-items:center;">
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
                         <label><input type="radio" name="mode" value="youtube" checked> YouTube URL</label>
                         <label><input type="radio" name="mode" value="paste"> Paste Transcript</label>
+                        <label><input type="radio" name="mode" value="upload"> Upload SRT/VTT</label>
                     </div>
                 </div>
 
@@ -446,6 +238,14 @@ def index():
                     <textarea id="rawTranscript" name="rawTranscript" rows="12" placeholder="Paste the full transcript here…" style="width:100%; padding:12px; border:2px solid #e1e8ed; border-radius:8px; font-family:monospace;"></textarea>
                     <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
                         Tip: You can paste any text (meeting notes, article text, etc.). We'll summarize it.
+                    </small>
+                </div>
+
+                <div class="form-group" id="uploadGroup" style="display:none;">
+                    <label for="subtitleFile">Upload SRT/VTT File</label>
+                    <input type="file" id="subtitleFile" name="subtitleFile" accept=".srt,.vtt" style="width:100%; padding:12px; border:2px solid #e1e8ed; border-radius:8px;">
+                    <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                        Upload subtitle files when YouTube is rate-limited. We'll extract the text and summarize it.
                     </small>
                 </div>
 
@@ -474,11 +274,13 @@ def index():
         // mode toggle
         const urlGroup = document.getElementById('urlGroup');
         const pasteGroup = document.getElementById('pasteGroup');
+        const uploadGroup = document.getElementById('uploadGroup');
         document.querySelectorAll('input[name="mode"]').forEach(r => {
             r.addEventListener('change', () => {
                 const mode = document.querySelector('input[name="mode"]:checked').value;
                 urlGroup.style.display = mode === 'youtube' ? 'block' : 'none';
                 pasteGroup.style.display = mode === 'paste' ? 'block' : 'none';
+                uploadGroup.style.display = mode === 'upload' ? 'block' : 'none';
             });
         });
 
@@ -489,6 +291,7 @@ def index():
             const summaryFormat = document.getElementById('summaryFormat').value;
             const mode = document.querySelector('input[name="mode"]:checked').value;
             const rawTranscript = document.getElementById('rawTranscript')?.value || '';
+            const subtitleFile = document.getElementById('subtitleFile')?.files[0];
             
             // Show loading state
             document.getElementById('submitBtn').disabled = true;
@@ -497,18 +300,33 @@ def index():
             document.getElementById('error').style.display = 'none';
             
             try {
-                const response = await fetch('/process', {
+                let response;
+                
+                if (mode === 'upload' && subtitleFile) {
+                    // Handle file upload
+                    const formData = new FormData();
+                    formData.append('file', subtitleFile);
+                    formData.append('summary_format', summaryFormat);
+                    
+                    response = await fetch('/upload_subs', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    // Handle regular processing
+                    response = await fetch('/process', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        mode,
+                            mode,
                         video_url: videoUrl,
-                        raw_transcript: rawTranscript,
-                        summary_format: summaryFormat
+                            raw_transcript: rawTranscript,
+                            summary_format: summaryFormat
                     })
                 });
+                }
                 
                 const data = await response.json();
                 
@@ -560,8 +378,76 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.2.1-diagnostics'
+        'version': '4.3.0-resilient-captions'
     })
+
+@app.route('/upload_subs', methods=['POST'])
+def upload_subs():
+    """Upload SRT/VTT subtitle files as escape hatch when YouTube is rate-limited"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file uploaded'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        if not file.filename.lower().endswith(('.srt', '.vtt')):
+            return jsonify({'success': False, 'error': 'Only SRT and VTT files are supported'}), 400
+        
+        # Read file content
+        content = file.read().decode('utf-8', errors='ignore')
+        
+        # Parse subtitle content to plain text
+        lines = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line: continue
+            if line.isdigit(): continue  # subtitle number
+            if '-->' in line: continue   # timestamp
+            if line.startswith('WEBVTT'): continue  # VTT header
+            if line.startswith('NOTE'): continue    # VTT notes
+            lines.append(line)
+        
+        text = '\n'.join(lines).strip()
+        if len(text) < 20:
+            return jsonify({'success': False, 'error': 'File appears to be empty or invalid'}), 400
+        
+        # Get summary format
+        summary_format = request.form.get('summary_format', 'bullet_points')
+        
+        # Generate summary
+        base_id = str(uuid.uuid4())[:8]
+        summary_md = summarize_with_gemini(text, summary_format)
+        download_content = generate_download_content(base_id, text, summary_md)
+        
+        # Generate download links
+        transcript_data = f"data:text/plain;charset=utf-8,{quote(text)}"
+        markdown_data = f"data:text/markdown;charset=utf-8,{quote(summary_md)}"
+        html_data = f"data:text/html;charset=utf-8,{quote(download_content['html'])}"
+        
+        links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
+        links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
+        links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
+        
+        body = f"""
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+          <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (from {secure_filename(file.filename)})</h3>
+          <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{text}</div>
+          <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
+          <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+        </div>
+        """
+        
+        return jsonify({
+            'success': True, 
+            'transcript': body, 
+            'download_links': links, 
+            'message': f'Processed uploaded {secure_filename(file.filename)} file.'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/process', methods=['POST'])
 def process_video():
@@ -605,20 +491,35 @@ def process_video():
         if not is_youtube_url(video_url):
             return jsonify({'success': False, 'error': 'Use a YouTube link or switch to Paste mode.'}), 400
 
-        base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-        text, diag = fetch_youtube_captions_text(video_url)
+        # Use resilient caption fetcher with cache + backoff
+        text, diag = get_captions(video_url)
         if not text:
-            return jsonify({
-                'success': False,
-                'error': 'Captions not available or not accessible.',
-                'diagnostics': diag,
-                'fixes': [
-                    'Check if the video actually has captions (CC).',
-                    'If they are non-English, we attempt auto-translation; if blocked, paste your own transcript.',
-                    'Avoid age-restricted/private/members-only videos.',
-                    'Try again later for recent uploads (captions sometimes lag).'
-                ]
-            }), 404
+            # Determine appropriate error response based on diagnostics
+            if diag.get("reason") == "rate_limited_or_blocked":
+                return jsonify({
+                    'success': False,
+                    'error': 'Captions temporarily unavailable (rate-limited by YouTube).',
+                    'diagnostics': diag,
+                    'fixes': [
+                        'Try again in a minute (we automatically retry with backoff).',
+                        'Switch to Paste mode (works instantly).',
+                        'Upload an SRT/VTT file using the file upload option.',
+                    ]
+                }), 429
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Captions not available or not accessible for this video.',
+                    'diagnostics': diag,
+                    'fixes': [
+                        'Check if the video actually has captions (CC).',
+                        'If they are non-English, we attempt auto-translation; if blocked, paste your own transcript.',
+                        'Avoid age-restricted/private/members-only videos.',
+                        'Try again later for recent uploads (captions sometimes lag).'
+                    ]
+                }), 404
+
+        base_id = str(uuid.uuid4())[:8]
 
         summary_md = summarize_with_gemini(text, summary_format)
         download_content = generate_download_content(base_id, text, summary_md)
