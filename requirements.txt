@@ -1,5 +1,5 @@
 Flask==2.3.3
 youtube-transcript-api==0.6.2
-anthropic==0.3.11
+anthropic==0.34.2
 markdown==3.5.1
 httpx==0.24.1
