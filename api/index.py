@@ -1,23 +1,12 @@
-from flask import Flask, jsonify, request, send_file
-import os
-import time
-import markdown
-import assemblyai as aai
-import anthropic
-import uuid
-import re
-import httpx
+import os, uuid, markdown, re
+from flask import Flask, request, jsonify, send_file
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
-app = Flask(__name__)
-
-# API Configuration
+import anthropic
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
-
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-if ASSEMBLYAI_API_KEY:
-    aai.settings.api_key = ASSEMBLYAI_API_KEY
+
+app = Flask(__name__)
 
 # YouTube ID extraction regex
 YOUTUBE_ID_RE = re.compile(
@@ -39,149 +28,61 @@ def ensure_dirs():
     os.makedirs("transcripts", exist_ok=True)
     os.makedirs("summaries", exist_ok=True)
 
-def safe_id_from(url_or_id: str) -> str:
-    base = (url_or_id or "").strip() or str(uuid.uuid4())
-    base = base.split("?")[0].split("#")[0]
-    return (base[-64:] or str(uuid.uuid4())).replace("/", "_")
+def is_youtube_url(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
 
-def transcribe_via_url(media_url: str, poll_secs: float = 2.5, max_wait: int = 600):
-    """Submit the remote URL directly to AAI. Returns (text, err)."""
-    if not ASSEMBLYAI_API_KEY:
-        return None, "ASSEMBLYAI_API_KEY not set"
-    try:
-        tx = aai.Transcriber().transcribe(media_url)
-        job_id = getattr(tx, "id", None)
-        print(f"[AAI:url] submitted id={job_id} url={media_url}")
-    except Exception as e:
-        return None, f"AssemblyAI submit error (url): {e}"
-
-    waited = 0.0
-    while True:
-        try:
-            tx = aai.Transcript.get_by_id(job_id)
-        except Exception as e:
-            return None, f"AssemblyAI poll error: {e}"
-        status, err, text = getattr(tx, "status", None), getattr(tx, "error", None), getattr(tx, "text", None)
-        print(f"[AAI:url] poll id={job_id} status={status} waited={waited:.1f}s err={err!r}")
-        if status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
-            break
-        time.sleep(poll_secs); waited += poll_secs
-        if waited > max_wait:
-            return None, "AssemblyAI timed out while polling"
-    if status == aai.TranscriptStatus.error:
-        return None, f"AssemblyAI transcription failed: {err or 'unknown error'}"
-    return (text or "").strip(), None
-
-def upload_to_aai(source_url: str, chunk_size=5 * 1024 * 1024):
-    """Streams bytes from source_url -> AAI /upload. Returns (upload_url, err)."""
-    if not ASSEMBLYAI_API_KEY:
-        return None, "ASSEMBLYAI_API_KEY not set"
-    headers = {"authorization": ASSEMBLYAI_API_KEY}
-    try:
-        with httpx.stream("GET", source_url, follow_redirects=True, timeout=60) as r:
-            if r.status_code >= 400:
-                return None, f"Source GET {r.status_code} from upstream"
-            last = None
-            with httpx.Client(timeout=60) as client:
-                for chunk in r.iter_bytes(chunk_size):
-                    last = client.post("https://api.assemblyai.com/v2/upload",
-                                       headers=headers, content=chunk)
-                    if last.status_code >= 400:
-                        return None, f"AAI upload error {last.status_code}: {last.text[:200]}"
-            return last.json().get("upload_url"), None
-    except Exception as e:
-        return None, f"Upload pipeline error: {e}"
-
-def transcribe_via_upload(source_url: str, poll_secs: float = 2.5, max_wait: int = 600):
-    """Use AAI upload endpoint, then transcribe the returned upload_url."""
-    up_url, up_err = upload_to_aai(source_url)
-    if up_err: 
-        return None, f"AssemblyAI upload pipeline failed: {up_err}"
-    try:
-        tx = aai.Transcriber().transcribe(up_url)
-        job_id = getattr(tx, "id", None)
-        print(f"[AAI:upload] submitted id={job_id}")
-    except Exception as e:
-        return None, f"AssemblyAI submit error (upload): {e}"
-    waited = 0.0
-    while True:
-        try:
-            tx = aai.Transcript.get_by_id(job_id)
-        except Exception as e:
-            return None, f"AssemblyAI poll error: {e}"
-        status, err, text = getattr(tx, "status", None), getattr(tx, "error", None), getattr(tx, "text", None)
-        print(f"[AAI:upload] poll id={job_id} status={status} waited={waited:.1f}s err={err!r}")
-        if status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
-            break
-        time.sleep(poll_secs); waited += poll_secs
-        if waited > max_wait:
-            return None, "AssemblyAI timed out while polling"
-    if status == aai.TranscriptStatus.error:
-        return None, f"AssemblyAI transcription failed after upload: {err or 'unknown error'}"
-    return (text or "").strip(), None
-
-def summarize_with_anthropic(text: str, summary_format: str = "bullet_points"):
-    if not anthropic_client:
-        return None, "ANTHROPIC_API_KEY not set"
-    if not text:
-        return None, "Empty transcript text; cannot summarize"
-
-    templates = {
-        "bullet_points": "Summarize in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
-        "detailed_summary": "Write a detailed, organized summary: topic, key points, examples, conclusions/next steps.\n\nTranscript:\n{t}",
-    }
-    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text[:200000])  # trim huge inputs
-
-    try:
-        resp = anthropic_client.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=2500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text.strip(), None
-    except Exception as e:
-        return None, f"Anthropic error: {e}"
-
-def is_youtube_url(u: str) -> bool:
-    return "youtube.com" in u or "youtu.be" in u
-
-def fetch_youtube_captions_text(url: str, languages=("en","en-US","en-GB")) -> str | None:
-    vid = extract_video_id(url)
-    if not vid: 
+def fetch_youtube_captions_text(video_url: str, languages=("en","en-US","en-GB")) -> str | None:
+    vid = extract_video_id(video_url)
+    if not vid:
         return None
     try:
         items = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        return "\n".join([i.get("text","") for i in items]).strip() or None
+        text = "\n".join([i.get("text","") for i in items]).strip()
+        return text or None
     except (TranscriptsDisabled, NoTranscriptFound):
         return None
     except Exception:
+        # age-restricted, members-only, region-blocked, or oddball cases
         return None
 
+def summarize_with_anthropic(text: str, summary_format: str = "bullet_points") -> str:
+    if not anthropic_client:
+        # No API key: return a simple trimmed excerpt as a "summary"
+        return "\n".join(text.splitlines()[:50])
+
+    templates = {
+        "bullet_points": "Summarize in crisp bullet points with key ideas and actionable takeaways.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
+        "detailed_summary": "Detailed, organized summary: topic/purpose, key points, notable examples, conclusions/next steps.\n\nTranscript:\n{t}",
+    }
+    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text[:200000])
+    resp = anthropic_client.messages.create(
+        model="claude-3-sonnet-20240229",
+        max_tokens=2500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
 def write_outputs(base_id: str, transcript_text: str, summary_md: str):
-    try:
-        ensure_dirs()
-        tx_path = os.path.join("transcripts", f"{base_id}.txt")
-        md_path = os.path.join("summaries", f"{base_id}.md")
-        html_path = os.path.join("summaries", f"{base_id}.html")
+    ensure_dirs()
+    tx_path  = os.path.join("transcripts", f"{base_id}.txt")
+    md_path  = os.path.join("summaries",  f"{base_id}.md")
+    html_path= os.path.join("summaries",  f"{base_id}.html")
 
-        with open(tx_path, "w", encoding="utf-8") as f:
-            f.write(transcript_text or "")
+    with open(tx_path, "w", encoding="utf-8") as f:
+        f.write(transcript_text or "")
 
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(summary_md or "")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(summary_md or "")
 
-        html_body = markdown.markdown(summary_md or "")
-        full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
+    html_body = markdown.markdown(summary_md or "")
+    full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
 <style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
 </head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(full_html)
 
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(full_html)
-
-        return tx_path, md_path, html_path, None
-    except Exception as e:
-        return None, None, None, f"Write error: {e}"
+    return tx_path, md_path, html_path
 
 @app.route('/')
 def index():
@@ -192,7 +93,7 @@ def index():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VidScribe2AI - AI Video Transcription & Summarization</title>
+    <title>VidScribe2AI - YouTube Caption Transcription & Summarization</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="icon" type="image/svg+xml" href="/sitelogo.svg">
     <style>
@@ -350,18 +251,17 @@ def index():
                     <img src="/sitelogo.svg" alt="VidScribe2AI Logo">
                 </div>
             </div>
-            <p>Transform any video into structured summaries with AI-powered transcription</p>
+            <p>Transform YouTube videos into structured summaries using AI-powered caption transcription</p>
         </div>
 
         <div class="form-container">
             <form id="transcribeForm">
                 <div class="form-group">
-                    <label for="videoUrl">Video/Audio URL</label>
-                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
+                    <label for="videoUrl">YouTube Video URL</label>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        ✅ <strong>Direct media:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        ✅ <strong>YouTube:</strong> If the video has captions, we'll use them (fast & free)<br>
-                        💡 <em>If no captions, paste a direct media URL or upload audio to your cloud and paste the link</em>
+                        ✅ <strong>Supported:</strong> YouTube links with captions (we use the video's captions directly)<br>
+                        ⚠️ <strong>If the video has no captions:</strong> try a different video or add captions first
                     </small>
                 </div>
 
@@ -432,16 +332,16 @@ def index():
                             errorMessage += '<li>' + suggestion + '</li>';
                         });
                         errorMessage += '</ul>';
-                        if (data.supported_formats) {
-                            errorMessage += '<br><strong>Supported formats:</strong> ' + data.supported_formats;
-                        }
-                        if (data.example_urls) {
-                            errorMessage += '<br><strong>Example URLs:</strong><ul>';
-                            data.example_urls.forEach(url => {
-                                errorMessage += '<li>' + url + '</li>';
-                            });
-                            errorMessage += '</ul>';
-                        }
+                    }
+                    if (data.fixes) {
+                        errorMessage += '<br><strong>Fixes:</strong><ul>';
+                        data.fixes.forEach(fix => {
+                            errorMessage += '<li>' + fix + '</li>';
+                        });
+                        errorMessage += '</ul>';
+                    }
+                    if (data.why) {
+                        errorMessage += '<br><strong>Why:</strong> ' + data.why;
                     }
                     throw new Error(errorMessage);
                 }
@@ -462,10 +362,8 @@ def index():
 def health():
     return jsonify({
         'status': 'healthy', 
-        'assemblyai_configured': bool(os.getenv("ASSEMBLYAI_API_KEY")),
         'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
-        'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY")),
-        'version': '2.4.0-bulletproof-fallback'
+        'version': '3.0.0-youtube-only'
     })
 
 @app.route('/download/<filename>')
@@ -502,7 +400,6 @@ def download_file(filename):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/process', methods=['POST'])
 def process_video():
     try:
@@ -511,70 +408,54 @@ def process_video():
         summary_format = data.get('summary_format', 'bullet_points')
 
         if not video_url or not video_url.startswith(('http://', 'https://')):
-            return jsonify({'success': False, 'error': 'Provide a valid http(s) Video/Audio URL'}), 400
+            return jsonify({'success': False, 'error': 'Provide a valid http(s) URL'}), 400
 
-        base_id = extract_video_id(video_url) or safe_id_from(video_url)
+        if not is_youtube_url(video_url):
+            return jsonify({
+                'success': False,
+                'error': 'This instance only supports YouTube links.',
+                'suggestions': [
+                    'Paste a YouTube URL with captions enabled',
+                    'Or upload the transcript text directly (feature pending)'
+                ]
+            }), 400
 
-        # YouTube captions path (fastest, no downloads)
-        if is_youtube_url(video_url):
-            captions = fetch_youtube_captions_text(video_url)
-            if captions:
-                transcript_text = captions
-            else:
-                return jsonify({
-                    'success': False,
-                    'stage': 'transcribe',
-                    'error': 'YouTube captions failed: No captions available for this video',
-                    'suggestions': [
-                        'Use a direct media URL (MP4/MP3/WAV/etc.)',
-                        'Or upload the audio/video to your cloud storage and paste the direct link',
-                        'Or use a different video with captions enabled'
-                    ],
-                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC'
-                }), 400
-        else:
-            # Direct media URL path with upload fallback
-            text, err = transcribe_via_url(video_url)
-            if err:
-                # Only fallback on retrieval-ish errors
-                hints = ("retrieve", "403", "404", "redirect", "forbidden", "not accessible", "timeout", "unsupported", "download error", "unable to download")
-                if any(h in err.lower() for h in hints):
-                    print(f"[FALLBACK] Direct URL failed with: {err}")
-                    print(f"[FALLBACK] Attempting upload fallback for: {video_url}")
-                    text, err = transcribe_via_upload(video_url)
-                    if err:
-                        print(f"[FALLBACK] Upload fallback also failed: {err}")
-                    else:
-                        print(f"[FALLBACK] Upload fallback succeeded!")
-            
-            if err:
-                return jsonify({'success': False, 'stage': 'transcribe', 'error': err}), 502
-            
-            transcript_text = text
+        base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
 
-        # Summarize
-        summary_md, sum_err = summarize_with_anthropic(transcript_text, summary_format)
-        if sum_err:
-            return jsonify({'success': False, 'stage': 'summarize', 'error': sum_err}), 502
+        # Fetch captions
+        transcript_text = fetch_youtube_captions_text(video_url)
+        if not transcript_text:
+            return jsonify({
+                'success': False,
+                'error': 'No captions available for this YouTube video.',
+                'why': 'Captions may be disabled, auto-captions unavailable, age-restricted, private, or members-only.',
+                'fixes': [
+                    'Try a different video with captions',
+                    'Enable captions on the video (if it\'s yours)',
+                    'Or use a direct media URL path in a separate instance'
+                ]
+            }), 404
 
-        # Persist
-        tx_path, md_path, html_path, w_err = write_outputs(base_id, transcript_text, summary_md)
-        if w_err:
-            return jsonify({'success': False, 'stage': 'write', 'error': w_err}), 500
+        # Summarize (or just echo if no Anthropic key)
+        summary_md = summarize_with_anthropic(transcript_text, summary_format)
+
+        # Persist for your download buttons
+        tx_path, md_path, html_path = write_outputs(base_id, transcript_text, summary_md)
 
         links = ""
-        if html_path and os.path.exists(html_path):
-            links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a>'
-        if md_path and os.path.exists(md_path):
-            links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a>'
-        if tx_path and os.path.exists(tx_path):
+        if os.path.exists(html_path):
+            links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
+        if os.path.exists(md_path):
+            links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
+        if os.path.exists(tx_path):
             links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
 
+        # Inline preview
         preview_html = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
             <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{(transcript_text or '')}</div>
-            <h3 style="color:#2c3e50;margin:20px 0 12px;">AI Summary ({summary_format.replace('_',' ').title()})</h3>
+            <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
             <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
         </div>
         """
@@ -583,11 +464,11 @@ def process_video():
             'success': True,
             'transcript': preview_html,
             'download_links': links,
-            'message': 'Processed.'
+            'message': 'Processed via YouTube captions.'
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'stage': 'unknown', 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
