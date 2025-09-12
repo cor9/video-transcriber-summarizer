@@ -257,11 +257,26 @@ def index():
         <div class="form-container">
             <form id="transcribeForm">
                 <div class="form-group">
-                    <label for="videoUrl">YouTube Video URL</label>
-                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." required>
-                    <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        ✅ <strong>Supported:</strong> YouTube links with captions (we use the video's captions directly)<br>
-                        ⚠️ <strong>If the video has no captions:</strong> try a different video or add captions first
+                    <label>Input Mode</label>
+                    <div style="display:flex; gap:12px; align-items:center;">
+                        <label><input type="radio" name="mode" value="youtube" checked> YouTube URL</label>
+                        <label><input type="radio" name="mode" value="paste"> Paste Transcript</label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="urlGroup">
+                    <label for="videoUrl">YouTube URL</label>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." >
+                    <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                        Supported: YouTube links **with captions**. For non-YouTube, switch to "Paste Transcript."
+                    </small>
+                </div>
+
+                <div class="form-group" id="pasteGroup" style="display:none;">
+                    <label for="rawTranscript">Paste Transcript</label>
+                    <textarea id="rawTranscript" name="rawTranscript" rows="12" placeholder="Paste the full transcript here…" style="width:100%; padding:12px; border:2px solid #e1e8ed; border-radius:8px; font-family:monospace;"></textarea>
+                    <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                        Tip: You can paste any text (meeting notes, article text, etc.). We'll summarize it.
                     </small>
                 </div>
 
@@ -274,9 +289,7 @@ def index():
                     </select>
                 </div>
 
-                <button type="submit" class="submit-btn" id="submitBtn">
-                    🚀 Transcribe & Summarize
-                </button>
+                <button type="submit" class="submit-btn" id="submitBtn">🚀 Process</button>
             </form>
 
             <div class="error" id="error"></div>
@@ -289,11 +302,24 @@ def index():
     </div>
 
     <script>
+        // mode toggle
+        const urlGroup = document.getElementById('urlGroup');
+        const pasteGroup = document.getElementById('pasteGroup');
+        document.querySelectorAll('input[name="mode"]').forEach(r => {
+            r.addEventListener('change', () => {
+                const mode = document.querySelector('input[name="mode"]:checked').value;
+                urlGroup.style.display = mode === 'youtube' ? 'block' : 'none';
+                pasteGroup.style.display = mode === 'paste' ? 'block' : 'none';
+            });
+        });
+
         document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const videoUrl = document.getElementById('videoUrl').value;
             const summaryFormat = document.getElementById('summaryFormat').value;
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const rawTranscript = document.getElementById('rawTranscript')?.value || '';
             
             // Show loading state
             document.getElementById('submitBtn').disabled = true;
@@ -308,7 +334,9 @@ def index():
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
+                        mode,
                         video_url: videoUrl,
+                        raw_transcript: rawTranscript,
                         summary_format: summaryFormat
                     })
                 });
@@ -350,7 +378,7 @@ def index():
                 document.getElementById('error').style.display = 'block';
             } finally {
                 document.getElementById('submitBtn').disabled = false;
-                document.getElementById('submitBtn').textContent = '🚀 Transcribe & Summarize';
+                document.getElementById('submitBtn').textContent = '🚀 Process';
             }
         });
     </script>
@@ -363,7 +391,7 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
-        'version': '3.0.0-youtube-only'
+        'version': '3.1.0-paste-mode'
     })
 
 @app.route('/download/<filename>')
@@ -404,9 +432,55 @@ def download_file(filename):
 def process_video():
     try:
         data = request.get_json(force=True) or {}
+        mode = (data.get('mode') or 'youtube').strip()
         video_url = (data.get('video_url') or '').strip()
+        raw_transcript = (data.get('raw_transcript') or '').strip()
         summary_format = data.get('summary_format', 'bullet_points')
 
+        # 1) PASTE MODE (or any request with non-empty raw_transcript) → no external calls
+        if mode == 'paste' or raw_transcript:
+            if not raw_transcript or len(raw_transcript) < 20:
+                return jsonify({
+                    'success': False,
+                    'error': 'Please paste a transcript (at least 20 characters).'
+                }), 400
+
+            # Optional guardrail: max size
+            if len(raw_transcript) > 200000:
+                return jsonify({
+                    'success': False,
+                    'error': 'Transcript too long (max 200,000 characters). Please shorten it.'
+                }), 400
+
+            base_id = str(uuid.uuid4())[:8]  # or let them name it later
+            # summarize (uses Anthropic if key present; otherwise returns excerpt)
+            summary_md = summarize_with_anthropic(raw_transcript, summary_format)
+            tx_path, md_path, html_path = write_outputs(base_id, raw_transcript, summary_md)
+
+            links = ""
+            if os.path.exists(html_path):
+                links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
+            if os.path.exists(md_path):
+                links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
+            if os.path.exists(tx_path):
+                links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+
+            preview_html = f"""
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
+                <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{raw_transcript}</div>
+                <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
+                <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+            </div>
+            """
+            return jsonify({
+                'success': True,
+                'transcript': preview_html,
+                'download_links': links,
+                'message': 'Processed pasted transcript.'
+            })
+
+        # 2) YOUTUBE MODE - existing YouTube captions logic
         if not video_url or not video_url.startswith(('http://', 'https://')):
             return jsonify({'success': False, 'error': 'Provide a valid http(s) URL'}), 400
 
@@ -416,7 +490,7 @@ def process_video():
                 'error': 'This instance only supports YouTube links.',
                 'suggestions': [
                     'Paste a YouTube URL with captions enabled',
-                    'Or upload the transcript text directly (feature pending)'
+                    'Or switch to "Paste Transcript" mode for any text'
                 ]
             }), 400
 
@@ -432,7 +506,7 @@ def process_video():
                 'fixes': [
                     'Try a different video with captions',
                     'Enable captions on the video (if it\'s yours)',
-                    'Or use a direct media URL path in a separate instance'
+                    'Or switch to "Paste Transcript" mode'
                 ]
             }), 404
 
