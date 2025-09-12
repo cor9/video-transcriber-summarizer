@@ -3,7 +3,7 @@
   "name": "vidscribe2ai",
   "builds": [
     {
-      "src": "api/index.py",
+      "src": "api/test.py",
       "use": "@vercel/python"
     }
   ],
@@ -14,7 +14,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "api/test.py"
     }
   ],
   "env": {

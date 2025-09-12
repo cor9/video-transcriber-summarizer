@@ -6,7 +6,7 @@ import assemblyai as aai
 import anthropic
 from datetime import datetime
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../templates')
 
 # API Configuration
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
