@@ -365,10 +365,10 @@ def index():
                 </div>
 
                 <div class="form-group" id="uploadGroup" style="display:none;">
-                    <label for="subtitleFile">Upload SRT/VTT File</label>
-                    <input type="file" id="subtitleFile" name="subtitleFile" accept=".srt,.vtt" style="width:100%; padding:12px; border:2px solid #e1e8ed; border-radius:8px;">
+                    <label for="subtitleFile">Upload SRT/VTT/TXT File</label>
+                    <input type="file" id="subtitleFile" name="subtitleFile" accept=".srt,.vtt,.txt" style="width:100%; padding:12px; border:2px solid #e1e8ed; border-radius:8px;">
                     <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
-                        Upload subtitle files when YouTube is rate-limited. We'll extract the text and summarize it.
+                        Upload subtitle files (SRT/VTT) or text files (TXT) when YouTube is rate-limited. We'll extract the text and summarize it.
                     </small>
                 </div>
 
@@ -552,7 +552,7 @@ def health():
 
 @app.route('/upload_subs', methods=['POST'])
 def upload_subs():
-    """Upload SRT/VTT subtitle files as escape hatch when YouTube is rate-limited"""
+    """Upload SRT/VTT/TXT files as escape hatch when YouTube is rate-limited"""
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'No file uploaded'}), 400
@@ -561,33 +561,38 @@ def upload_subs():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        if not file.filename.lower().endswith(('.srt', '.vtt')):
-            return jsonify({'success': False, 'error': 'Only SRT and VTT files are supported'}), 400
+        if not file.filename.lower().endswith(('.srt', '.vtt', '.txt')):
+            return jsonify({'success': False, 'error': 'Only SRT, VTT, and TXT files are supported'}), 400
         
         # Read file content
         content = file.read().decode('utf-8', errors='ignore')
         
-        # Parse subtitle content to plain text
-        lines = []
-        for line in content.splitlines():
-            line = line.strip()
-            if not line: continue
-            if line.isdigit(): continue  # subtitle number
-            if '-->' in line: continue   # timestamp
-            if line.startswith('WEBVTT'): continue  # VTT header
-            if line.startswith('NOTE'): continue    # VTT notes
-            lines.append(line)
+        # Parse content based on file type
+        if file.filename.lower().endswith('.txt'):
+            # For TXT files, just clean the text (remove Tactiq garbage if present)
+            text = clean_paste(content).strip()
+        else:
+            # For SRT/VTT files, parse subtitle content to plain text
+            lines = []
+            for line in content.splitlines():
+                line = line.strip()
+                if not line: continue
+                if line.isdigit(): continue  # subtitle number
+                if '-->' in line: continue   # timestamp
+                if line.startswith('WEBVTT'): continue  # VTT header
+                if line.startswith('NOTE'): continue    # VTT notes
+                lines.append(line)
+            text = '\n'.join(lines).strip()
         
-        text = '\n'.join(lines).strip()
         if len(text) < 20:
-            return jsonify({'success': False, 'error': 'File appears to be empty or invalid'}), 400
+            return jsonify({'success': False, 'error': 'File appears to be empty or invalid after processing'}), 400
         
         # Get summary format
         summary_format = request.form.get('summary_format', 'bullet_points')
         
-        # Generate summary
+        # Generate summary with timing metrics
         base_id = str(uuid.uuid4())[:8]
-        summary_md = summarize_with_gemini(text, summary_format)
+        summary_md, gen_ms, usage = summarize_with_gemini(text, summary_format)
         download_content = generate_download_content(base_id, text, summary_md)
         
         # Generate download links
@@ -599,12 +604,16 @@ def upload_subs():
         links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
         links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
         
+        MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         body = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (from {secure_filename(file.filename)})</h3>
           <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{text}</div>
           <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
           <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+          <div style="margin-top:10px;font-size:12px;color:#666">
+            Generated by {MODEL_NAME} in ~{gen_ms} ms
+          </div>
         </div>
         """
         
@@ -612,7 +621,8 @@ def upload_subs():
             'success': True, 
             'transcript': body, 
             'download_links': links, 
-            'message': f'Processed uploaded {secure_filename(file.filename)} file.'
+            'message': f'Processed uploaded {secure_filename(file.filename)} file.',
+            'metrics': {"model": MODEL_NAME, "generation_ms": gen_ms}
         })
         
     except Exception as e:
