@@ -47,27 +47,42 @@ def safe_id_from(url_or_id: str) -> str:
 def transcribe_with_assemblyai_media_url(media_url: str, poll_secs: float = 2.5, max_wait: int = 600):
     if not ASSEMBLYAI_API_KEY:
         return None, "ASSEMBLYAI_API_KEY not set"
+
     try:
+        # Submit job
         tx = aai.Transcriber().transcribe(media_url)
+        job_id = getattr(tx, "id", None)
+        print(f"[AAI] submitted -> id={job_id!r} for url={media_url}")
     except Exception as e:
         return None, f"AssemblyAI submit error: {e}"
 
-    waited = 0
+    # Poll
+    waited = 0.0
     while True:
         try:
-            tx = aai.Transcriber().get(tx.id)
+            tx = aai.Transcriber().get_transcript(job_id)
         except Exception as e:
             return None, f"AssemblyAI poll error: {e}"
-        if tx.status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
+
+        status = getattr(tx, "status", None)
+        err    = getattr(tx, "error", None)
+        text   = getattr(tx, "text", None)
+
+        print(f"[AAI] poll id={job_id} status={status} waited={waited:.1f}s error={err!r}")
+
+        if status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
             break
+
         time.sleep(poll_secs)
         waited += poll_secs
         if waited > max_wait:
             return None, "AssemblyAI timed out while polling"
 
-    if tx.status == aai.TranscriptStatus.error:
-        return None, f"AssemblyAI transcription failed: {tx.error}"
-    return (tx.text or "").strip(), None
+    if status == aai.TranscriptStatus.error:
+        # Return the exact AAI message so you see it in UI and logs
+        return None, f"AssemblyAI transcription failed: {err or 'unknown error'}"
+
+    return (text or "").strip(), None
 
 def summarize_with_anthropic(text: str, summary_format: str = "bullet_points"):
     if not anthropic_client:
@@ -91,6 +106,19 @@ def summarize_with_anthropic(text: str, summary_format: str = "bullet_points"):
         return resp.content[0].text.strip(), None
     except Exception as e:
         return None, f"Anthropic error: {e}"
+
+def fetch_youtube_captions_text(video_url: str, languages=("en", "en-US", "en-GB")):
+    vid = extract_video_id(video_url)
+    if not vid:
+        return None, "No video ID found in URL"
+    try:
+        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
+        text = "\n".join([item.get("text","") for item in transcript_list]).strip()
+        return text or None, None
+    except (TranscriptsDisabled, NoTranscriptFound):
+        return None, "No captions available for this video"
+    except Exception as e:
+        return None, f"Error fetching captions: {e}"
 
 def write_outputs(base_id: str, transcript_text: str, summary_md: str):
     try:
@@ -494,17 +522,20 @@ def process_video():
             if tx_err:
                 return jsonify({'success': False, 'stage': 'transcribe', 'error': tx_err}), 502
         else:
-            # If you also added a YouTube-captions path earlier, call it here.
-            # For this triage, we'll just return a helpful message instead of 500'ing.
-            return jsonify({
-                'success': False,
-                'stage': 'transcribe',
-                'error': 'YouTube URL received but this instance is configured for direct media URLs only.',
-                'suggestions': [
-                    'Paste a direct MP4/MP3/WAV URL',
-                    'Or enable the captions path for YouTube links in the server (recommended)'
-                ]
-            }), 400
+            # YouTube captions path
+            transcript_text, tx_err = fetch_youtube_captions_text(video_url)
+            if tx_err:
+                return jsonify({
+                    'success': False,
+                    'stage': 'transcribe',
+                    'error': f'YouTube captions failed: {tx_err}',
+                    'suggestions': [
+                        'Use a direct media URL (MP4/MP3/WAV/etc.)',
+                        'Or upload the audio/video to your cloud storage and paste the direct link',
+                        'Or use a different video with captions enabled'
+                    ],
+                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC'
+                }), 400
 
         # Summarize
         summary_md, sum_err = summarize_with_anthropic(transcript_text, summary_format)
