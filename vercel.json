@@ -19,6 +19,7 @@
   "github": {
     "autoAlias": true,
     "autoJobCancelation": true
-  }
+  },
+  "buildCommand": "echo 'Building VidScribe2AI'"
 }
 
