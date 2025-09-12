@@ -1,44 +1,28 @@
 from flask import Flask, jsonify, request, send_file
 import os
-import tempfile
+import markdown
 import assemblyai as aai
 import anthropic
-import yt_dlp
-import markdown
 import uuid
 import re
-import io
-import requests
-from youtube_transcript_api import YouTubeTranscriptApi
-from googleapiclient.discovery import build
-
-# Test import
-print("✅ All imports successful")
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 app = Flask(__name__)
 
 # API Configuration
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
 
-# Create output directory for generated files
-OUTPUT_DIR = "/tmp/vidscribe_outputs"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Initialize API clients only if keys are available
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 if ASSEMBLYAI_API_KEY:
     aai.settings.api_key = ASSEMBLYAI_API_KEY
-
-# Initialize Anthropic client lazily to avoid import issues
-anthropic_client = None
 
 # YouTube ID extraction regex
 YOUTUBE_ID_RE = re.compile(
     r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
 )
 
-def extract_youtube_video_id(url: str) -> str | None:
+def extract_video_id(url: str) -> str | None:
     """Extract YouTube video ID from various URL formats"""
     # Handles standard and youtu.be forms
     m = YOUTUBE_ID_RE.search(url)
@@ -49,412 +33,108 @@ def extract_youtube_video_id(url: str) -> str | None:
         return url.rstrip('/').split('/')[-1][:11]
     return None
 
-def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en", "en-US", "en-GB")) -> str | None:
-    """
-    Tries to fetch captions for a YouTube video using youtube-transcript-api.
-    Returns plain text if found; otherwise None.
-    """
-    vid = extract_youtube_video_id(youtube_url)
+def ensure_dirs():
+    os.makedirs("transcripts", exist_ok=True)
+    os.makedirs("summaries", exist_ok=True)
+
+def is_youtube_url(url: str) -> bool:
+    y = ("youtube.com" in url) or ("youtu.be" in url)
+    return y
+
+def fetch_youtube_transcript_text(video_url: str, languages=("en", "en-US", "en-GB")) -> str | None:
+    vid = extract_video_id(video_url)
     if not vid:
-        print(f"No video ID found for: {youtube_url}")
+        return None
+    try:
+        # Fetch transcript entries (list of dicts with 'text', 'start', 'duration')
+        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
+        # Join lines
+        return "\n".join([item["text"] for item in transcript_list if item.get("text")]).strip() or None
+    except (TranscriptsDisabled, NoTranscriptFound):
+        return None
+    except Exception:
         return None
 
-    try:
-        print(f"Attempting to fetch captions for video ID: {vid}")
-        # Use youtube-transcript-api which doesn't require OAuth2
-        api = YouTubeTranscriptApi()
-        transcript_list = api.list(vid)
-        print(f"Found transcript list with {len(list(transcript_list))} transcripts")
-        
-        # Try to get transcript in preferred language order
-        for lang in lang_priority:
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                transcript_data = transcript.fetch()
-                # Convert to plain text
-                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-                print(f"Successfully fetched captions for language: {lang}, length: {len(text)}")
-                return text.strip() if text.strip() else None
-            except:
-                continue
-        
-        # If no preferred language found, try generated transcripts
-        try:
-            transcript = transcript_list.find_generated_transcript(['en'])
-            transcript_data = transcript.fetch()
-            text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-            return text.strip() if text.strip() else None
-        except:
-            pass
-        
-        # If still no luck, try any available transcript
-        try:
-            available_transcripts = list(transcript_list)
-            if available_transcripts:
-                transcript = available_transcripts[0]
-                transcript_data = transcript.fetch()
-                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-                return text.strip() if text.strip() else None
-        except:
-            pass
-            
-        return None
-        
-    except Exception as e:
-        print(f"Error fetching YouTube captions: {str(e)}")
-        return None
+def transcribe_direct_media_url(media_url: str) -> str:
+    if not ASSEMBLYAI_API_KEY:
+        raise RuntimeError("ASSEMBLYAI_API_KEY not set")
+    tx = aai.Transcriber().transcribe(media_url)
+    while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
+        tx = aai.Transcriber().get_transcript(tx.id)
+    if tx.status == aai.TranscriptStatus.error:
+        raise RuntimeError(f"Transcription failed: {tx.error}")
+    return tx.text or ""
 
-def get_youtube_transcript(video_id):
-    """Get transcript directly from YouTube captions"""
-    try:
-        print(f"Attempting to get transcript for video ID: {video_id}")
-        
-        # Try to get transcript in different languages
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        print(f"Found transcript list: {list(transcript_list)}")
-        
-        # Try to get English transcript first
-        try:
-            transcript = transcript_list.find_transcript(['en'])
-            print("Found English transcript")
-            transcript_data = transcript.fetch()
-        except Exception as e:
-            print(f"English transcript not available: {str(e)}")
-            # If English not available, get the first available transcript
-            try:
-                transcript = transcript_list.find_generated_transcripts(['en'])
-                print("Found generated English transcript")
-                transcript_data = transcript[0].fetch()
-            except Exception as e2:
-                print(f"Generated English transcript not available: {str(e2)}")
-                # Try any available transcript
-                try:
-                    available_transcripts = list(transcript_list)
-                    if available_transcripts:
-                        transcript = available_transcripts[0]
-                        print(f"Using first available transcript: {transcript}")
-                        transcript_data = transcript.fetch()
-                    else:
-                        raise Exception("No transcripts available")
-                except Exception as e3:
-                    raise Exception(f"No transcripts available: {str(e3)}")
-        
-        # Convert transcript data to plain text
-        transcript_text = ' '.join([item['text'] for item in transcript_data])
-        print(f"Successfully extracted transcript with {len(transcript_data)} segments")
-        
-        return transcript_text
-        
-    except Exception as e:
-        print(f"Error getting YouTube transcript: {str(e)}")
-        # Provide more specific error messages
-        error_str = str(e).lower()
-        if 'video unavailable' in error_str or 'private video' in error_str:
-            raise Exception("Video is private, unavailable, or has restricted access")
-        elif 'no transcript' in error_str or 'transcript not found' in error_str:
-            raise Exception("This video does not have captions available")
-        elif 'bot' in error_str or 'sign in' in error_str:
-            raise Exception("YouTube is blocking automated access to this video")
-        else:
-            raise Exception(f"Failed to get YouTube transcript: {str(e)}")
+def summarize_text(text: str, summary_format: str = "bullet_points") -> str:
+    if not anthropic_client:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
 
-def check_youtube_video_accessibility(video_id):
-    """Check if a YouTube video is accessible and has captions"""
-    try:
-        # Try to get transcript list to check accessibility
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        available_transcripts = list(transcript_list)
-        
-        return {
-            'accessible': True,
-            'has_captions': len(available_transcripts) > 0,
-            'transcript_count': len(available_transcripts),
-            'transcript_languages': [str(t) for t in available_transcripts]
-        }
-    except Exception as e:
-        error_str = str(e).lower()
-        if 'video unavailable' in error_str or 'private video' in error_str:
-            return {
-                'accessible': False,
-                'has_captions': False,
-                'error': 'Video is private, unavailable, or has restricted access'
-            }
-        elif 'bot' in error_str or 'sign in' in error_str:
-            return {
-                'accessible': False,
-                'has_captions': False,
-                'error': 'YouTube is blocking automated access to this video'
-            }
-        else:
-            return {
-                'accessible': False,
-                'has_captions': False,
-                'error': f'Unknown error: {str(e)}'
-            }
-
-def download_audio_from_youtube(youtube_url):
-    """Download audio from YouTube URL using yt-dlp with advanced bot detection bypass"""
-    try:
-        # Create temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        temp_file.close()
-        
-        # Try multiple strategies to bypass bot detection
-        strategies = [
-            # Strategy 1: Standard bypass
-            {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_file.name,
-                'extractaudio': True,
-                'audioformat': 'mp4',
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Upgrade-Insecure-Requests': '1',
-                },
-                'extractor_retries': 5,
-                'fragment_retries': 5,
-                'retries': 5,
-                'socket_timeout': 60,
-                'sleep_interval': 2,
-                'max_sleep_interval': 10,
-            },
-            # Strategy 2: Mobile user agent
-            {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_file.name,
-                'extractaudio': True,
-                'audioformat': 'mp4',
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
-                },
-                'extractor_retries': 3,
-                'fragment_retries': 3,
-                'retries': 3,
-                'socket_timeout': 30,
-            },
-            # Strategy 3: Minimal approach
-            {
-                'format': 'bestaudio/best',
-                'outtmpl': temp_file.name,
-                'extractaudio': True,
-                'audioformat': 'mp4',
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-                'extractor_retries': 2,
-                'fragment_retries': 2,
-                'retries': 2,
-            }
-        ]
-        
-        last_error = None
-        for i, ydl_opts in enumerate(strategies):
-            try:
-                print(f"Trying download strategy {i+1}...")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([youtube_url])
-                
-                # Check if file was created and has content
-                if os.path.exists(temp_file.name) and os.path.getsize(temp_file.name) > 0:
-                    print(f"Download successful with strategy {i+1}")
-                    return temp_file.name
-                else:
-                    print(f"Strategy {i+1} failed - no content downloaded")
-                    
-            except Exception as e:
-                print(f"Strategy {i+1} failed: {str(e)}")
-                last_error = e
-                continue
-        
-        # All strategies failed
-        raise last_error or Exception("All download strategies failed")
-        
-    except Exception as e:
-        # If YouTube blocks the download, provide helpful error message
-        if "Sign in to confirm you're not a bot" in str(e) or "bot" in str(e).lower():
-            raise Exception("YouTube is blocking automated downloads. Please try a different video or use a direct media URL instead. You can also try downloading the video manually and uploading it to a cloud storage service.")
-        else:
-            raise Exception(f"Failed to download YouTube audio: {str(e)}")
-
-def transcribe_audio_with_assemblyai(audio_file_path):
-    """Transcribe local audio file using AssemblyAI"""
-    try:
-        # Upload file to AssemblyAI
-        with open(audio_file_path, 'rb') as f:
-            transcript = aai.Transcriber().transcribe(f)
-        
-        # Wait for transcription to complete
-        while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
-            transcript = aai.Transcriber().get_transcript(transcript.id)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            raise Exception(f"Transcription failed: {transcript.error}")
-        
-        return transcript.text
-        
-    except Exception as e:
-        raise Exception(f"Transcription failed: {str(e)}")
-
-def summarize_with_anthropic(transcript_text, prompt_choice):
-    """Generate summary using Anthropic Claude"""
-    global anthropic_client
-    
-    try:
-        # Initialize Anthropic client if not already done
-        if anthropic_client is None:
-            if not ANTHROPIC_API_KEY:
-                raise Exception("ANTHROPIC_API_KEY not configured")
-            anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        
-        prompt_templates = {
-            "bullet_points": """
-Please summarize the following video transcript in clear, concise bullet points. Focus on the main topics, key insights, and important takeaways. Use bullet points for easy reading.
+    templates = {
+        "bullet_points": """Please summarize the following transcript in crisp bullet points focused on main ideas and actionable takeaways.
 
 Transcript:
 {transcript}
 """,
-            "key_insights": """
-Analyze the following video transcript and extract the most important insights, lessons, and actionable information. Present your findings in a structured format with clear headings.
+        "key_insights": """Extract the most important insights, lessons, and practical takeaways from the transcript. Use short sections with clear headings.
 
 Transcript:
 {transcript}
 """,
-            "detailed_summary": """
-Provide a comprehensive summary of the following video transcript. Include:
-1. Main topic and purpose
-2. Key points discussed
-3. Important details and examples
-4. Conclusions or takeaways
+        "detailed_summary": """Write a detailed, organized summary of the transcript, including:
+1) Topic & purpose
+2) Key points
+3) Notable examples/details
+4) Conclusions or next steps
 
 Transcript:
 {transcript}
 """
-        }
-        
-        prompt = prompt_templates.get(prompt_choice, prompt_templates["bullet_points"])
-        prompt = prompt.format(transcript=transcript_text)
-        
-        response = anthropic_client.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        return response.content[0].text
-        
-    except Exception as e:
-        raise Exception(f"Summarization failed: {str(e)}")
+    }
+    prompt = templates.get(summary_format, templates["bullet_points"]).format(transcript=text)
 
-def generate_output_files(summary_text, transcript_text, filename_prefix="transcript"):
-    """Generate Markdown and HTML files from summary text and save to output directory"""
-    try:
-        # Generate unique filename
-        unique_id = str(uuid.uuid4())[:8]
-        base_filename = f"{filename_prefix}_{unique_id}"
-        
-        # Create file paths in output directory
-        md_file_path = os.path.join(OUTPUT_DIR, f"{base_filename}.md")
-        html_file_path = os.path.join(OUTPUT_DIR, f"{base_filename}.html")
-        
-        # Write Markdown file with both transcript and summary
-        with open(md_file_path, 'w', encoding='utf-8') as md_file:
-            md_file.write(f"# {filename_prefix.title()} Summary\n\n")
-            md_file.write(f"**Generated on:** {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            md_file.write("## Full Transcript\n\n")
-            md_file.write(transcript_text)
-            md_file.write("\n\n## AI Summary\n\n")
-            md_file.write(summary_text)
-        
-        # Convert to HTML and write
-        html_content = markdown.markdown(summary_text)
-        transcript_html = markdown.markdown(transcript_text)
-        
-        with open(html_file_path, 'w', encoding='utf-8') as html_file:
-            html_file.write(f"""
-<!DOCTYPE html>
-<html lang="en">
+    resp = anthropic_client.messages.create(
+        model="claude-3-sonnet-20240229",
+        max_tokens=3000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+def write_outputs(base_id: str, transcript_text: str, summary_md: str):
+    ensure_dirs()
+    transcript_path = os.path.join("transcripts", f"{base_id}.txt")
+    summary_md_path = os.path.join("summaries", f"{base_id}.md")
+    summary_html_path = os.path.join("summaries", f"{base_id}.html")
+
+    # Write transcript
+    with open(transcript_path, "w", encoding="utf-8") as f:
+        f.write(transcript_text or "")
+
+    # Write MD
+    with open(summary_md_path, "w", encoding="utf-8") as f:
+        f.write(summary_md or "")
+
+    # Convert MD to HTML
+    html_body = markdown.markdown(summary_md or "")
+    full_html = f"""<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{filename_prefix.title()} Summary</title>
-    <style>
-        body {{ 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            line-height: 1.6; 
-            color: #333; 
-            max-width: 1000px; 
-            margin: 0 auto; 
-            padding: 20px;
-            background: #f8f9fa;
-        }}
-        .container {{
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }}
-        h1, h2, h3 {{ color: #2c3e50; }}
-        .transcript {{ 
-            background: #f8f9fa; 
-            padding: 20px; 
-            border-radius: 8px; 
-            margin: 20px 0;
-            border-left: 4px solid #6c757d;
-        }}
-        .summary {{ 
-            background: #e8f4fd; 
-            padding: 20px; 
-            border-radius: 8px; 
-            margin: 20px 0;
-            border-left: 4px solid #3498db;
-        }}
-        .meta {{
-            color: #6c757d;
-            font-size: 0.9em;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #dee2e6;
-        }}
-    </style>
+  <meta charset="utf-8" />
+  <title>{base_id} Summary</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 40px auto; padding: 0 16px; }}
+    h1, h2, h3 {{ color: #2c3e50; }}
+    .summary {{ background: #f8f9fa; padding: 16px; border-radius: 8px; }}
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎥 {filename_prefix.title()} Summary</h1>
-        <div class="meta">
-            <strong>Generated on:</strong> {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        </div>
-        
-        <h2>📝 Full Transcript</h2>
-        <div class="transcript">{transcript_html}</div>
-        
-        <h2>🎯 AI Summary</h2>
-        <div class="summary">{html_content}</div>
-    </div>
+  <h1>Summary</h1>
+  <div class="summary">{html_body}</div>
 </body>
-</html>
-            """)
-        
-        return md_file_path, html_file_path, base_filename
-        
-    except Exception as e:
-        raise Exception(f"File generation failed: {str(e)}")
+</html>"""
+    with open(summary_html_path, "w", encoding="utf-8") as f:
+        f.write(full_html)
+
+    return transcript_path, summary_md_path, summary_html_path
 
 @app.route('/')
 def index():
@@ -808,80 +488,76 @@ def test_youtube_captions(video_id):
             'message': 'YouTube captions test failed'
         }), 400
 
-@app.route('/transcribe', methods=['POST'])
-def transcribe():
+@app.route('/process', methods=['POST'])
+def process_video():
     try:
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            return jsonify({'error': 'ANTHROPIC_API_KEY is not set'}), 500
-
-        data = request.get_json(force=True)
+        data = request.get_json()
         video_url = (data.get('video_url') or '').strip()
-        prompt_choice = data.get('prompt_choice', 'bullet_points')
-        output_format = data.get('output_format', 'html')
+        summary_format = data.get('summary_format', 'bullet_points')
 
         if not video_url or not video_url.startswith(('http://', 'https://')):
-            return jsonify({'error': 'Provide a valid http(s) URL'}), 400
+            return jsonify({'error': 'Provide a valid http(s) Video/Audio URL'}), 400
 
-        youtube_domains = ('youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com')
-        is_youtube = any(d in video_url for d in youtube_domains)
+        # Choose an ID for file outputs
+        base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
 
+        # 1) Get transcript
         transcript_text = None
-
-        if is_youtube:
-            # 1) Try official captions first (legal, fast, free)
-            print(f"Processing YouTube URL: {video_url}")
-            transcript_text = fetch_youtube_captions_text(video_url)
-            print(f"Captions result: {'SUCCESS' if transcript_text else 'FAILED'}")
+        if is_youtube_url(video_url):
+            # Try YouTube transcript (fast, no downloads)
+            transcript_text = fetch_youtube_transcript_text(video_url)
             if not transcript_text:
-                # No captions available
                 return jsonify({
-                    'error': 'No captions available for this YouTube video.',
+                    'error': 'No captions/transcript available for this YouTube video.',
                     'suggestions': [
                         'Use a direct media URL (MP4/MP3/WAV/etc.)',
-                        'Or upload your audio/video to cloud storage and paste the direct link',
-                        'Or use a different video with captions enabled'
-                    ],
-                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC'
+                        'Or upload the audio/video to your cloud storage and paste the direct link'
+                    ]
                 }), 400
         else:
-            # 2) Direct media URL → transcribe with AssemblyAI if configured
-            if not os.getenv("ASSEMBLYAI_API_KEY"):
+            # Direct media URL → AssemblyAI
+            if not ASSEMBLYAI_API_KEY:
                 return jsonify({
-                    'error': 'ASSEMBLYAI_API_KEY is not set and this is not a YouTube URL with captions.',
+                    'error': 'Direct media transcription requires ASSEMBLYAI_API_KEY.',
                     'suggestions': [
-                        'Set ASSEMBLYAI_API_KEY to allow transcription of direct media URLs',
-                        'Or provide a YouTube link that has captions enabled'
+                        'Set ASSEMBLYAI_API_KEY or use a YouTube link that has captions.'
                     ]
                 }), 500
+            transcript_text = transcribe_direct_media_url(video_url)
 
-            tx = aai.Transcriber().transcribe(video_url)
-            while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
-                tx = aai.Transcriber().get_transcript(tx.id)
-            if tx.status == aai.TranscriptStatus.error:
-                return jsonify({'error': f'Transcription failed: {tx.error}'}), 502
-            transcript_text = tx.text
+        # 2) Summarize
+        summary_md = summarize_text(transcript_text, summary_format=summary_format)
 
-        # Summarize
-        summary = summarize_with_anthropic(transcript_text, prompt_choice)
+        # 3) Persist outputs for download links
+        transcript_path, summary_md_path, summary_html_path = write_outputs(
+            base_id, transcript_text, summary_md
+        )
 
-        if output_format == 'html':
-            formatted = f"""
-            <div style="font-family: Arial, sans-serif; line-height:1.6; color:#333;">
-              <h3 style="color:#2c3e50;">📝 Transcript</h3>
-              <div style="background:#f8f9fa; padding:12px; border-radius:8px; white-space:pre-wrap;">{transcript_text}</div>
-              <h3 style="color:#2c3e50; margin-top:24px;">🎯 AI Summary</h3>
-              <div style="background:#e8f4fd; padding:12px; border-radius:8px; border-left:4px solid #3498db;">{summary}</div>
-            </div>
-            """
-        else:
-            formatted = summary
+        # 4) Build download links (reuse your existing /download endpoint)
+        download_links = ""
+        if os.path.exists(summary_html_path):
+            download_links += f'<a href="/download/{os.path.basename(summary_html_path)}" target="_blank">📄 Download HTML</a>'
+        if os.path.exists(summary_md_path):
+            download_links += f'<a href="/download/{os.path.basename(summary_md_path)}" target="_blank">📝 Download Markdown</a>'
+        if os.path.exists(transcript_path):
+            download_links += f'<a href="/download/{os.path.basename(transcript_path)}" target="_blank">📄 Download Transcript</a>'
+
+        # 5) Inline display
+        formatted_content = f"""
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Transcript</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{(transcript_text or '')}</div>
+
+            <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({summary_format.replace('_', ' ').title()})</h3>
+            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+        </div>
+        """
 
         return jsonify({
             'success': True,
-            'transcript': formatted,
-            'raw_transcript': transcript_text,
-            'summary': summary,
-            'message': 'Completed using YouTube captions.' if is_youtube else 'Completed (AssemblyAI).'
+            'transcript': formatted_content,
+            'download_links': download_links,
+            'message': 'Processed successfully.'
         })
 
     except Exception as e:
