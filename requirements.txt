@@ -1,4 +1,4 @@
-Flask==3.0.0
+Flask==2.3.3
 assemblyai==0.21.0
-anthropic==0.25.0
-httpx==0.25.2
+anthropic==0.7.8
+yt-dlp==2023.12.30
