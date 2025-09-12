@@ -83,7 +83,50 @@ def get_youtube_transcript(video_id):
         
     except Exception as e:
         print(f"Error getting YouTube transcript: {str(e)}")
-        raise Exception(f"Failed to get YouTube transcript: {str(e)}")
+        # Provide more specific error messages
+        error_str = str(e).lower()
+        if 'video unavailable' in error_str or 'private video' in error_str:
+            raise Exception("Video is private, unavailable, or has restricted access")
+        elif 'no transcript' in error_str or 'transcript not found' in error_str:
+            raise Exception("This video does not have captions available")
+        elif 'bot' in error_str or 'sign in' in error_str:
+            raise Exception("YouTube is blocking automated access to this video")
+        else:
+            raise Exception(f"Failed to get YouTube transcript: {str(e)}")
+
+def check_youtube_video_accessibility(video_id):
+    """Check if a YouTube video is accessible and has captions"""
+    try:
+        # Try to get transcript list to check accessibility
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        available_transcripts = list(transcript_list)
+        
+        return {
+            'accessible': True,
+            'has_captions': len(available_transcripts) > 0,
+            'transcript_count': len(available_transcripts),
+            'transcript_languages': [str(t) for t in available_transcripts]
+        }
+    except Exception as e:
+        error_str = str(e).lower()
+        if 'video unavailable' in error_str or 'private video' in error_str:
+            return {
+                'accessible': False,
+                'has_captions': False,
+                'error': 'Video is private, unavailable, or has restricted access'
+            }
+        elif 'bot' in error_str or 'sign in' in error_str:
+            return {
+                'accessible': False,
+                'has_captions': False,
+                'error': 'YouTube is blocking automated access to this video'
+            }
+        else:
+            return {
+                'accessible': False,
+                'has_captions': False,
+                'error': f'Unknown error: {str(e)}'
+            }
 
 def download_audio_from_youtube(youtube_url):
     """Download audio from YouTube URL using yt-dlp with bot detection bypass"""
@@ -607,14 +650,38 @@ def test_youtube_captions(video_id):
     try:
         print(f"Testing YouTube captions for video ID: {video_id}")
         
+        # Check accessibility first
+        accessibility = check_youtube_video_accessibility(video_id)
+        
+        if not accessibility['accessible']:
+            return jsonify({
+                'success': False,
+                'video_id': video_id,
+                'accessible': False,
+                'error': accessibility['error'],
+                'message': 'Video is not accessible'
+            }), 400
+        
+        if not accessibility['has_captions']:
+            return jsonify({
+                'success': False,
+                'video_id': video_id,
+                'accessible': True,
+                'has_captions': False,
+                'message': 'Video is accessible but has no captions'
+            }), 400
+        
         # Try to get transcript
         transcript_text = get_youtube_transcript(video_id)
         
         return jsonify({
             'success': True,
             'video_id': video_id,
+            'accessible': True,
+            'has_captions': True,
             'transcript_length': len(transcript_text),
             'transcript_preview': transcript_text[:500] + '...' if len(transcript_text) > 500 else transcript_text,
+            'transcript_languages': accessibility.get('transcript_languages', []),
             'message': 'YouTube captions test successful'
         })
         
@@ -672,20 +739,40 @@ def transcribe():
             transcript_text = ""
             transcript_source = ""
             
-            # Try to get transcript from YouTube captions first (faster and more reliable)
-            try:
-                print("Attempting to get transcript from YouTube captions...")
-                transcript_text = get_youtube_transcript(video_id)
-                transcript_source = "YouTube Captions"
-                print("Successfully got transcript from YouTube captions")
+            # Check video accessibility first
+            print("Checking video accessibility...")
+            accessibility = check_youtube_video_accessibility(video_id)
+            print(f"Video accessibility check: {accessibility}")
+            
+            if not accessibility['accessible']:
+                # Video is not accessible
+                error_message = accessibility['error']
+                suggestions = [
+                    'This video may be private, age-restricted, or geo-blocked',
+                    'Try a different YouTube video that is publicly accessible',
+                    'Use a direct media URL instead (MP4, MP3, etc.)',
+                    'Check if the video is available in your region'
+                ]
                 
-            except Exception as caption_error:
-                print(f"Failed to get captions: {str(caption_error)}")
-                print(f"Caption error details: {type(caption_error).__name__}: {str(caption_error)}")
-                print("Falling back to audio download and AssemblyAI transcription...")
+                if 'blocking automated access' in error_message:
+                    suggestions.insert(0, 'YouTube is blocking automated access to this specific video')
+                    suggestions.insert(1, 'Try a different video or use a direct media URL')
                 
+                return jsonify({
+                    'error': 'YouTube Video Not Accessible',
+                    'message': error_message,
+                    'suggestions': suggestions,
+                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
+                    'example_urls': [
+                        'https://example.com/video.mp4',
+                        'https://example.com/audio.mp3'
+                    ]
+                }), 400
+            
+            if not accessibility['has_captions']:
+                # Video is accessible but has no captions
+                print("Video accessible but no captions available, trying audio download...")
                 try:
-                    # Fallback: Download audio and transcribe with AssemblyAI
                     temp_audio_file = download_audio_from_youtube(video_url)
                     print(f"Downloaded audio to: {temp_audio_file}")
                     
@@ -694,29 +781,67 @@ def transcribe():
                     print("Transcription completed via AssemblyAI")
                     
                 except Exception as download_error:
-                    # Both methods failed
-                    error_message = "Both YouTube captions and audio download failed."
-                    suggestions = [
-                        'This video may not have captions available',
-                        'Try a different YouTube video with captions',
-                        'Use a direct media URL instead (MP4, MP3, etc.)',
-                        'Check if the video is publicly accessible'
-                    ]
-                    
-                    if "blocking automated downloads" in str(download_error):
-                        error_message = "YouTube is blocking automated downloads and no captions are available."
-                        suggestions.insert(0, 'Try again later - sometimes the block is temporary')
-                    
                     return jsonify({
                         'error': 'YouTube Processing Failed',
-                        'message': error_message,
-                        'suggestions': suggestions,
+                        'message': 'Video has no captions and audio download failed',
+                        'suggestions': [
+                            'This video does not have captions available',
+                            'YouTube is blocking audio download for this video',
+                            'Try a different YouTube video with captions',
+                            'Use a direct media URL instead (MP4, MP3, etc.)'
+                        ],
                         'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
                         'example_urls': [
                             'https://example.com/video.mp4',
                             'https://example.com/audio.mp3'
                         ]
                     }), 400
+            else:
+                # Video has captions, try to get them
+                try:
+                    print("Attempting to get transcript from YouTube captions...")
+                    transcript_text = get_youtube_transcript(video_id)
+                    transcript_source = "YouTube Captions"
+                    print("Successfully got transcript from YouTube captions")
+                    
+                except Exception as caption_error:
+                    print(f"Failed to get captions: {str(caption_error)}")
+                    print(f"Caption error details: {type(caption_error).__name__}: {str(caption_error)}")
+                    print("Falling back to audio download and AssemblyAI transcription...")
+                    
+                    try:
+                        # Fallback: Download audio and transcribe with AssemblyAI
+                        temp_audio_file = download_audio_from_youtube(video_url)
+                        print(f"Downloaded audio to: {temp_audio_file}")
+                        
+                        transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
+                        transcript_source = "AssemblyAI Transcription"
+                        print("Transcription completed via AssemblyAI")
+                        
+                    except Exception as download_error:
+                        # Both methods failed
+                        error_message = "Both YouTube captions and audio download failed."
+                        suggestions = [
+                            'This video may have restricted access',
+                            'Try a different YouTube video with captions',
+                            'Use a direct media URL instead (MP4, MP3, etc.)',
+                            'Check if the video is publicly accessible'
+                        ]
+                        
+                        if "blocking automated downloads" in str(download_error):
+                            error_message = "YouTube is blocking automated access to this video."
+                            suggestions.insert(0, 'Try again later - sometimes the block is temporary')
+                        
+                        return jsonify({
+                            'error': 'YouTube Processing Failed',
+                            'message': error_message,
+                            'suggestions': suggestions,
+                            'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
+                            'example_urls': [
+                                'https://example.com/video.mp4',
+                                'https://example.com/audio.mp3'
+                            ]
+                        }), 400
             
         else:
             # Direct URL workflow: Transcribe directly
