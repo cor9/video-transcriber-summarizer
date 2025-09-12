@@ -189,11 +189,11 @@ def index():
             <form id="transcribeForm">
                 <div class="form-group">
                     <label for="videoUrl">Video/Audio URL</label>
-                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtu.be/VIDEO_ID or https://example.com/video.mp4" required>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://example.com/video.mp4 or https://example.com/audio.mp3" required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        ✅ <strong>YouTube URLs supported!</strong> Try pasting a YouTube link<br>
-                        Also supports: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        <em>Note: Some YouTube videos may not work due to restrictions</em>
+                        📹 <strong>Direct media URLs only</strong> - No YouTube links<br>
+                        ✅ Supports: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
+                        💡 <em>For YouTube videos, download the audio first and upload to cloud storage</em>
                     </small>
                 </div>
 
@@ -240,13 +240,32 @@ def index():
                 
                 if (data.success) {
                     // Show results
-                    document.getElementById('transcriptContent').innerHTML = '<h4>Transcript:</h4><p>' + data.transcript + '</p>';
+                    document.getElementById('transcriptContent').innerHTML = data.transcript;
                     document.getElementById('results').style.display = 'block';
                 } else {
-                    throw new Error(data.error || 'An error occurred');
+                    // Handle structured error responses
+                    let errorMessage = data.error || 'An error occurred';
+                    if (data.suggestions) {
+                        errorMessage += '<br><br><strong>Suggestions:</strong><ul>';
+                        data.suggestions.forEach(suggestion => {
+                            errorMessage += '<li>' + suggestion + '</li>';
+                        });
+                        errorMessage += '</ul>';
+                        if (data.supported_formats) {
+                            errorMessage += '<br><strong>Supported formats:</strong> ' + data.supported_formats;
+                        }
+                        if (data.example_urls) {
+                            errorMessage += '<br><strong>Example URLs:</strong><ul>';
+                            data.example_urls.forEach(url => {
+                                errorMessage += '<li>' + url + '</li>';
+                            });
+                            errorMessage += '</ul>';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
             } catch (error) {
-                document.getElementById('error').textContent = 'Error: ' + error.message;
+                document.getElementById('error').innerHTML = 'Error: ' + error.message;
                 document.getElementById('error').style.display = 'block';
             } finally {
                 document.getElementById('submitBtn').disabled = false;
@@ -287,6 +306,26 @@ def transcribe():
         # Validate video URL
         if not video_url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Invalid URL format'}), 400
+        
+        # Check if it's a YouTube URL
+        youtube_domains = ['youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com']
+        is_youtube = any(domain in video_url for domain in youtube_domains)
+        
+        if is_youtube:
+            return jsonify({
+                'error': 'YouTube URLs are not directly supported. Please use one of these alternatives:',
+                'suggestions': [
+                    '1. Download the video audio using a YouTube downloader tool',
+                    '2. Use a service like yt-dlp to extract the audio URL',
+                    '3. Upload the audio file to a cloud storage service and provide the direct link',
+                    '4. Try a different video/audio file with a direct URL (MP4, MP3, etc.)'
+                ],
+                'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
+                'example_urls': [
+                    'https://example.com/video.mp4',
+                    'https://example.com/audio.mp3'
+                ]
+            }), 400
         
         # Transcribe with AssemblyAI
         print(f"Starting transcription for URL: {video_url}")
