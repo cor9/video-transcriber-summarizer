@@ -60,6 +60,11 @@
 **Decision:** Added proper HTTP headers and user agents to bypass bot detection, implemented retry logic and timeout settings, added helpful error messages and suggestions when YouTube blocks downloads, updated UI to warn users about potential restrictions
 **Status:** Success
 
+## 2025-01-12
+**Issue:** User suggested fallback to get transcripts from YouTube captions or Tactiq
+**Decision:** Implemented YouTube captions fallback using youtube-transcript-api, created smart fallback system that tries captions first then audio download, added video ID extraction from various URL formats, enhanced error handling with multiple fallback options, updated UI to show transcript source information
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 

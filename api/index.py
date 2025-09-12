@@ -43,24 +43,46 @@ def extract_youtube_video_id(url):
 def get_youtube_transcript(video_id):
     """Get transcript directly from YouTube captions"""
     try:
+        print(f"Attempting to get transcript for video ID: {video_id}")
+        
         # Try to get transcript in different languages
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        print(f"Found transcript list: {list(transcript_list)}")
         
         # Try to get English transcript first
         try:
             transcript = transcript_list.find_transcript(['en'])
+            print("Found English transcript")
             transcript_data = transcript.fetch()
-        except:
+        except Exception as e:
+            print(f"English transcript not available: {str(e)}")
             # If English not available, get the first available transcript
-            transcript = transcript_list.find_generated_transcripts(['en'])
-            transcript_data = transcript[0].fetch()
+            try:
+                transcript = transcript_list.find_generated_transcripts(['en'])
+                print("Found generated English transcript")
+                transcript_data = transcript[0].fetch()
+            except Exception as e2:
+                print(f"Generated English transcript not available: {str(e2)}")
+                # Try any available transcript
+                try:
+                    available_transcripts = list(transcript_list)
+                    if available_transcripts:
+                        transcript = available_transcripts[0]
+                        print(f"Using first available transcript: {transcript}")
+                        transcript_data = transcript.fetch()
+                    else:
+                        raise Exception("No transcripts available")
+                except Exception as e3:
+                    raise Exception(f"No transcripts available: {str(e3)}")
         
         # Convert transcript data to plain text
         transcript_text = ' '.join([item['text'] for item in transcript_data])
+        print(f"Successfully extracted transcript with {len(transcript_data)} segments")
         
         return transcript_text
         
     except Exception as e:
+        print(f"Error getting YouTube transcript: {str(e)}")
         raise Exception(f"Failed to get YouTube transcript: {str(e)}")
 
 def download_audio_from_youtube(youtube_url):
@@ -579,6 +601,31 @@ def download_file(filename):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/test-youtube/<video_id>')
+def test_youtube_captions(video_id):
+    """Test endpoint to debug YouTube captions for a specific video"""
+    try:
+        print(f"Testing YouTube captions for video ID: {video_id}")
+        
+        # Try to get transcript
+        transcript_text = get_youtube_transcript(video_id)
+        
+        return jsonify({
+            'success': True,
+            'video_id': video_id,
+            'transcript_length': len(transcript_text),
+            'transcript_preview': transcript_text[:500] + '...' if len(transcript_text) > 500 else transcript_text,
+            'message': 'YouTube captions test successful'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'video_id': video_id,
+            'error': str(e),
+            'message': 'YouTube captions test failed'
+        }), 400
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     """Main transcription endpoint implementing the schema workflow"""
@@ -618,6 +665,7 @@ def transcribe():
             
             # Extract video ID
             video_id = extract_youtube_video_id(video_url)
+            print(f"Extracted video ID: {video_id}")
             if not video_id:
                 return jsonify({'error': 'Invalid YouTube URL format'}), 400
             
@@ -633,6 +681,7 @@ def transcribe():
                 
             except Exception as caption_error:
                 print(f"Failed to get captions: {str(caption_error)}")
+                print(f"Caption error details: {type(caption_error).__name__}: {str(caption_error)}")
                 print("Falling back to audio download and AssemblyAI transcription...")
                 
                 try:
