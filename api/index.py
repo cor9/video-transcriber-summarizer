@@ -7,13 +7,17 @@ import yt_dlp
 import markdown
 import uuid
 import re
+import io
+import requests
 from youtube_transcript_api import YouTubeTranscriptApi
+from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
 # API Configuration
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 # Create output directory for generated files
 OUTPUT_DIR = "/tmp/vidscribe_outputs"
@@ -26,19 +30,78 @@ if ASSEMBLYAI_API_KEY:
 # Initialize Anthropic client lazily to avoid import issues
 anthropic_client = None
 
-def extract_youtube_video_id(url):
+# YouTube ID extraction regex
+YOUTUBE_ID_RE = re.compile(
+    r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
+)
+
+def extract_youtube_video_id(url: str) -> str | None:
     """Extract YouTube video ID from various URL formats"""
-    patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)',
-        r'youtube\.com\/v\/([^&\n?#]+)',
-        r'youtube\.com\/watch\?.*v=([^&\n?#]+)'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+    # Handles standard and youtu.be forms
+    m = YOUTUBE_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    # youtu.be short form
+    if "youtu.be/" in url:
+        return url.rstrip('/').split('/')[-1][:11]
     return None
+
+def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en", "en-US", "en-GB")) -> str | None:
+    """
+    Tries to fetch captions for a YouTube video via the official API.
+    Returns plain text if found; otherwise None.
+    """
+    if not YOUTUBE_API_KEY:
+        return None  # captions path disabled without API key
+
+    vid = extract_youtube_video_id(youtube_url)
+    if not vid:
+        return None
+
+    service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+
+    # 1) List caption tracks
+    tracks = service.captions().list(part="id,snippet", videoId=vid).execute()
+    items = tracks.get("items", [])
+    if not items:
+        return None
+
+    # 2) Choose a track that matches our language priority (fallback to first)
+    def score(item):
+        lang = (item["snippet"].get("language") or "").lower()
+        try:
+            return lang_priority.index(lang)
+        except ValueError:
+            return len(lang_priority) + 1
+
+    items.sort(key=score)
+    chosen = items[0]
+    caption_id = chosen["id"]
+
+    # 3) Download SRT (best for plain text)
+    # The captions().download endpoint returns binary; we request 'srt'
+    # googleapiclient supports "media_body" downloads via MediaIoBaseDownload, but here
+    # we can call the REST endpoint directly as it's simpler for SRT:
+    # https://www.googleapis.com/youtube/v3/captions/{id}?tfmt=srt&key=API_KEY
+    download_url = f"https://www.googleapis.com/youtube/v3/captions/{caption_id}?tfmt=srt&key={YOUTUBE_API_KEY}"
+    r = requests.get(download_url, timeout=30)
+    if r.status_code != 200 or not r.text.strip():
+        return None
+
+    srt_text = r.text
+    # 4) Strip SRT timestamps/indexes to plain text
+    # Simple SRT → text conversion
+    lines = []
+    for line in srt_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.isdigit():
+            continue
+        if "-->" in line:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip() or None
 
 def get_youtube_transcript(video_id):
     """Get transcript directly from YouTube captions"""
@@ -568,16 +631,9 @@ def index():
                     <label for="videoUrl">Video/Audio URL</label>
                     <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        🎥 <strong>Supported Input Types:</strong><br>
-                        ✅ <strong>Direct media URLs:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        ⚠️ <strong>YouTube URLs:</strong> May be blocked by YouTube's anti-bot measures<br>
-                        💡 <em>For best results: Use direct media URLs or try the workarounds below</em><br>
-                        🔄 <strong>YouTube Workarounds:</strong><br>
-                        &nbsp;&nbsp;1️⃣ Download video manually (yt-dlp, 4K Video Downloader)<br>
-                        &nbsp;&nbsp;2️⃣ Upload audio to Google Drive/Dropbox → Use direct link<br>
-                        &nbsp;&nbsp;3️⃣ Try shorter videos (under 5 minutes work better)<br>
-                        &nbsp;&nbsp;4️⃣ Use videos with captions (they process faster)<br>
-                        ⏱️ <strong>Note:</strong> Vercel free tier has 10-second timeout limits
+                        ✅ <strong>Direct media:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
+                        ✅ <strong>YouTube:</strong> If the video has captions, we'll use them (fast & free)<br>
+                        💡 <em>If no captions, paste a direct media URL or upload audio to your cloud and paste the link</em>
                     </small>
                 </div>
 
@@ -676,7 +732,8 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'assemblyai_configured': bool(os.getenv("ASSEMBLYAI_API_KEY")),
-        'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY"))
+        'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
+        'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY"))
     })
 
 @app.route('/download/<filename>')
@@ -752,58 +809,61 @@ def test_youtube_captions(video_id):
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     try:
-        # sanity: API keys
-        if not os.getenv("ASSEMBLYAI_API_KEY"):
-            return jsonify({'error': 'ASSEMBLYAI_API_KEY is not set'}), 500
         if not os.getenv("ANTHROPIC_API_KEY"):
             return jsonify({'error': 'ANTHROPIC_API_KEY is not set'}), 500
 
         data = request.get_json(force=True)
-        video_url = data.get('video_url', '').strip()
+        video_url = (data.get('video_url') or '').strip()
         prompt_choice = data.get('prompt_choice', 'bullet_points')
         output_format = data.get('output_format', 'html')
 
         if not video_url or not video_url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Provide a valid http(s) URL'}), 400
 
-        # YouTube detection
         youtube_domains = ('youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com')
         is_youtube = any(d in video_url for d in youtube_domains)
 
         transcript_text = None
-        tmp_path = None
 
-        try:
-            if is_youtube:
-                # 1) download to temp file via yt-dlp
-                tmp_path = download_audio_from_youtube(video_url)
-                # 2) transcribe local file via AssemblyAI upload
-                transcript_text = transcribe_audio_with_assemblyai(tmp_path)
-            else:
-                # Direct media URL → stream URL to AssemblyAI
-                tx = aai.Transcriber().transcribe(video_url)
-                while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
-                    tx = aai.Transcriber().get_transcript(tx.id)
-                if tx.status == aai.TranscriptStatus.error:
-                    return jsonify({'error': f'Transcription failed: {tx.error}'}), 502
-                transcript_text = tx.text
+        if is_youtube:
+            # 1) Try official captions first (legal, fast, free)
+            transcript_text = fetch_youtube_captions_text(video_url)
+            if not transcript_text:
+                # No captions available
+                return jsonify({
+                    'error': 'No captions available for this YouTube video.',
+                    'suggestions': [
+                        'Use a direct media URL (MP4/MP3/WAV/etc.)',
+                        'Or upload your audio/video to cloud storage and paste the direct link',
+                        'Or use a different video with captions enabled'
+                    ],
+                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC'
+                }), 400
+        else:
+            # 2) Direct media URL → transcribe with AssemblyAI if configured
+            if not os.getenv("ASSEMBLYAI_API_KEY"):
+                return jsonify({
+                    'error': 'ASSEMBLYAI_API_KEY is not set and this is not a YouTube URL with captions.',
+                    'suggestions': [
+                        'Set ASSEMBLYAI_API_KEY to allow transcription of direct media URLs',
+                        'Or provide a YouTube link that has captions enabled'
+                    ]
+                }), 500
 
-        finally:
-            # always clean up temp file if created
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
+            tx = aai.Transcriber().transcribe(video_url)
+            while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
+                tx = aai.Transcriber().get_transcript(tx.id)
+            if tx.status == aai.TranscriptStatus.error:
+                return jsonify({'error': f'Transcription failed: {tx.error}'}), 502
+            transcript_text = tx.text
 
-        # Summarize with Anthropic
+        # Summarize
         summary = summarize_with_anthropic(transcript_text, prompt_choice)
 
-        # Response formatting
         if output_format == 'html':
             formatted = f"""
             <div style="font-family: Arial, sans-serif; line-height:1.6; color:#333;">
-              <h3 style="color:#2c3e50;">📝 Full Transcript</h3>
+              <h3 style="color:#2c3e50;">📝 Transcript</h3>
               <div style="background:#f8f9fa; padding:12px; border-radius:8px; white-space:pre-wrap;">{transcript_text}</div>
               <h3 style="color:#2c3e50; margin-top:24px;">🎯 AI Summary</h3>
               <div style="background:#e8f4fd; padding:12px; border-radius:8px; border-left:4px solid #3498db;">{summary}</div>
@@ -817,8 +877,9 @@ def transcribe():
             'transcript': formatted,
             'raw_transcript': transcript_text,
             'summary': summary,
-            'message': 'Transcription and summarization completed.'
+            'message': 'Completed using YouTube captions.' if is_youtube else 'Completed (AssemblyAI).'
         })
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

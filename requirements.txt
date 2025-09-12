@@ -5,3 +5,4 @@ httpx==0.24.1
 yt-dlp==2023.12.30
 youtube-transcript-api==0.6.2
 markdown==3.5.1
+google-api-python-client==2.141.0
