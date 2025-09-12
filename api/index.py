@@ -1,7 +1,19 @@
 from flask import Flask, jsonify, request
 import os
+import assemblyai as aai
+import anthropic
 
 app = Flask(__name__)
+
+# API Configuration
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Initialize API clients only if keys are available
+if ASSEMBLYAI_API_KEY:
+    aai.settings.api_key = ASSEMBLYAI_API_KEY
+if ANTHROPIC_API_KEY:
+    anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 @app.route('/')
 def index():
@@ -261,20 +273,99 @@ def transcribe():
         if not os.getenv("ASSEMBLYAI_API_KEY"):
             return jsonify({'error': 'ASSEMBLYAI_API_KEY environment variable is not set.'}), 500
         
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            return jsonify({'error': 'ANTHROPIC_API_KEY environment variable is not set.'}), 500
+        
         data = request.get_json()
         video_url = data.get('video_url')
+        prompt_choice = data.get('prompt_choice', 'bullet_points')
+        output_format = data.get('output_format', 'html')
         
         if not video_url:
             return jsonify({'error': 'Video URL is required'}), 400
         
-        # For now, return a simple response
+        # Validate video URL
+        if not video_url.startswith(('http://', 'https://')):
+            return jsonify({'error': 'Invalid URL format'}), 400
+        
+        # Transcribe with AssemblyAI
+        print(f"Starting transcription for URL: {video_url}")
+        transcript = aai.Transcriber().transcribe(video_url)
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
+        
+        # Wait for transcription to complete
+        while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
+            transcript = aai.Transcriber().get_transcript(transcript.id)
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
+        
+        transcript_text = transcript.text
+        
+        # Generate summary with Anthropic
+        prompt_templates = {
+            "bullet_points": """
+Please summarize the following video transcript in clear, concise bullet points. Focus on the main topics, key insights, and important takeaways. Use bullet points for easy reading.
+
+Transcript:
+{transcript}
+""",
+            "key_insights": """
+Analyze the following video transcript and extract the most important insights, lessons, and actionable information. Present your findings in a structured format with clear headings.
+
+Transcript:
+{transcript}
+""",
+            "detailed_summary": """
+Provide a comprehensive summary of the following video transcript. Include:
+1. Main topic and purpose
+2. Key points discussed
+3. Important details and examples
+4. Conclusions or takeaways
+
+Transcript:
+{transcript}
+"""
+        }
+        
+        prompt = prompt_templates.get(prompt_choice, prompt_templates["bullet_points"])
+        prompt = prompt.format(transcript=transcript_text)
+        
+        print("Generating summary with Anthropic...")
+        response = anthropic_client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        summary = response.content[0].text
+        
+        # Format response based on output format
+        if output_format == 'html':
+            formatted_summary = f"""
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{transcript_text}</div>
+                
+                <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary</h3>
+                <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{summary}</div>
+            </div>
+            """
+        else:
+            formatted_summary = summary
+        
         return jsonify({
             'success': True,
-            'transcript': 'Transcription functionality is being restored. Please check back soon!',
-            'message': 'Basic functionality working!'
+            'transcript': formatted_summary,
+            'raw_transcript': transcript_text,
+            'summary': summary,
+            'message': 'Transcription and summarization completed successfully!'
         })
         
     except Exception as e:
+        print(f"Error in transcribe: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
