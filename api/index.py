@@ -746,249 +746,76 @@ def test_youtube_captions(video_id):
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
-    """Main transcription endpoint implementing the schema workflow"""
-    temp_audio_file = None
-    temp_md_file = None
-    temp_html_file = None
-    
     try:
-        # Check if API keys are available
+        # sanity: API keys
         if not os.getenv("ASSEMBLYAI_API_KEY"):
-            return jsonify({'error': 'ASSEMBLYAI_API_KEY environment variable is not set.'}), 500
-        
+            return jsonify({'error': 'ASSEMBLYAI_API_KEY is not set'}), 500
         if not os.getenv("ANTHROPIC_API_KEY"):
-            return jsonify({'error': 'ANTHROPIC_API_KEY environment variable is not set.'}), 500
-        
-        data = request.get_json()
-        video_url = data.get('video_url')
+            return jsonify({'error': 'ANTHROPIC_API_KEY is not set'}), 500
+
+        data = request.get_json(force=True)
+        video_url = data.get('video_url', '').strip()
         prompt_choice = data.get('prompt_choice', 'bullet_points')
         output_format = data.get('output_format', 'html')
-        
-        if not video_url:
-            return jsonify({'error': 'Video URL is required'}), 400
-        
-        # Validate video URL
-        if not video_url.startswith(('http://', 'https://')):
-            return jsonify({'error': 'Invalid URL format'}), 400
-        
-        # Check if it's a YouTube URL
-        youtube_domains = ['youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com']
-        is_youtube = any(domain in video_url for domain in youtube_domains)
-        
-        transcript_text = ""
-        
-        if is_youtube:
-            # YouTube workflow: Try captions first, then download if needed
-            print(f"Processing YouTube URL: {video_url}")
-            
-            # Extract video ID
-            video_id = extract_youtube_video_id(video_url)
-            print(f"Extracted video ID: {video_id}")
-            if not video_id:
-                return jsonify({'error': 'Invalid YouTube URL format'}), 400
-            
-            transcript_text = ""
-            transcript_source = ""
-            
-            # Check video accessibility first
-            print("Checking video accessibility...")
-            accessibility = check_youtube_video_accessibility(video_id)
-            print(f"Video accessibility check: {accessibility}")
-            
-            if not accessibility['accessible']:
-                # Video is not accessible
-                error_message = accessibility['error']
-                suggestions = [
-                    'This video may be private, age-restricted, or geo-blocked',
-                    'Try a different YouTube video that is publicly accessible',
-                    'Use a direct media URL instead (MP4, MP3, etc.)',
-                    'Check if the video is available in your region'
-                ]
-                
-                if 'blocking automated access' in error_message:
-                    suggestions = [
-                        '🚫 <strong>YouTube is blocking automated access to this video</strong>',
-                        '📥 <strong>Solution 1:</strong> Download the video manually using yt-dlp, 4K Video Downloader, or similar',
-                        '☁️ <strong>Solution 2:</strong> Upload the audio file to Google Drive, Dropbox, or OneDrive',
-                        '🔗 <strong>Solution 3:</strong> Get the direct download link and paste it here',
-                        '🎯 <strong>Alternative:</strong> Try a different video or use a direct media URL',
-                        '💡 <strong>Note:</strong> This is a YouTube restriction, not an app limitation'
-                    ]
-                
-                return jsonify({
-                    'error': 'YouTube Video Not Accessible',
-                    'message': error_message,
-                    'suggestions': suggestions,
-                    'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
-                    'example_urls': [
-                        'https://example.com/video.mp4',
-                        'https://example.com/audio.mp3'
-                    ]
-                }), 400
-            
-            if not accessibility['has_captions']:
-                # Video is accessible but has no captions
-                print("Video accessible but no captions available, trying audio download...")
-                try:
-                    temp_audio_file = download_audio_from_youtube(video_url)
-                    print(f"Downloaded audio to: {temp_audio_file}")
-                    
-                    transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
-                    transcript_source = "AssemblyAI Transcription"
-                    print("Transcription completed via AssemblyAI")
-                    
-                except Exception as download_error:
-                    return jsonify({
-                        'error': 'YouTube Processing Failed',
-                        'message': 'Video has no captions and audio download failed',
-                        'suggestions': [
-                            'This video does not have captions available',
-                            'YouTube is blocking audio download for this video',
-                            'Try a different YouTube video with captions',
-                            'Use a direct media URL instead (MP4, MP3, etc.)'
-                        ],
-                        'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
-                        'example_urls': [
-                            'https://example.com/video.mp4',
-                            'https://example.com/audio.mp3'
-                        ]
-                    }), 400
-            else:
-                # Video has captions, try to get them
-                try:
-                    print("Attempting to get transcript from YouTube captions...")
-                    transcript_text = get_youtube_transcript(video_id)
-                    transcript_source = "YouTube Captions"
-                    print("Successfully got transcript from YouTube captions")
-                    
-                except Exception as caption_error:
-                    print(f"Failed to get captions: {str(caption_error)}")
-                    print(f"Caption error details: {type(caption_error).__name__}: {str(caption_error)}")
-                    print("Falling back to audio download and AssemblyAI transcription...")
-                    
-                    try:
-                        # Fallback: Download audio and transcribe with AssemblyAI
-                        temp_audio_file = download_audio_from_youtube(video_url)
-                        print(f"Downloaded audio to: {temp_audio_file}")
-                        
-                        transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
-                        transcript_source = "AssemblyAI Transcription"
-                        print("Transcription completed via AssemblyAI")
-                        
-                    except Exception as download_error:
-                        # Both methods failed
-                        error_message = "Both YouTube captions and audio download failed."
-                        suggestions = [
-                            'This video may have restricted access',
-                            'Try a different YouTube video with captions',
-                            'Use a direct media URL instead (MP4, MP3, etc.)',
-                            'Check if the video is publicly accessible'
-                        ]
-                        
-                        if "blocking automated downloads" in str(download_error):
-                            error_message = "YouTube is blocking automated access to this video."
-                            suggestions.insert(0, 'Try again later - sometimes the block is temporary')
-                        
-                        return jsonify({
-                            'error': 'YouTube Processing Failed',
-                            'message': error_message,
-                            'suggestions': suggestions,
-                            'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
-                            'example_urls': [
-                                'https://example.com/video.mp4',
-                                'https://example.com/audio.mp3'
-                            ]
-                        }), 400
-            
-        else:
-            # Direct URL workflow: Transcribe directly
-            print(f"Processing direct URL: {video_url}")
-            transcript = aai.Transcriber().transcribe(video_url)
-            
-            # Wait for transcription to complete
-            while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
-                transcript = aai.Transcriber().get_transcript(transcript.id)
-            
-            if transcript.status == aai.TranscriptStatus.error:
-                return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
-            
-            transcript_text = transcript.text
-            print("Transcription completed")
-        
-        # Step 3: Generate summary with Anthropic
-        print("Generating summary with Anthropic...")
-        summary = summarize_with_anthropic(transcript_text, prompt_choice)
-        print("Summary generated")
-        
-        # Step 4: Generate output files for download
-        md_file_path = None
-        html_file_path = None
-        base_filename = None
-        
+
+        if not video_url or not video_url.startswith(('http://', 'https://')):
+            return jsonify({'error': 'Provide a valid http(s) URL'}), 400
+
+        # YouTube detection
+        youtube_domains = ('youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com')
+        is_youtube = any(d in video_url for d in youtube_domains)
+
+        transcript_text = None
+        tmp_path = None
+
         try:
-            md_file_path, html_file_path, base_filename = generate_output_files(summary, transcript_text, "transcript")
-            print(f"Generated files: {md_file_path}, {html_file_path}")
-        except Exception as e:
-            print(f"File generation failed (non-critical): {str(e)}")
-        
-        # Format response based on output format
+            if is_youtube:
+                # 1) download to temp file via yt-dlp
+                tmp_path = download_audio_from_youtube(video_url)
+                # 2) transcribe local file via AssemblyAI upload
+                transcript_text = transcribe_audio_with_assemblyai(tmp_path)
+            else:
+                # Direct media URL → stream URL to AssemblyAI
+                tx = aai.Transcriber().transcribe(video_url)
+                while tx.status not in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
+                    tx = aai.Transcriber().get_transcript(tx.id)
+                if tx.status == aai.TranscriptStatus.error:
+                    return jsonify({'error': f'Transcription failed: {tx.error}'}), 502
+                transcript_text = tx.text
+
+        finally:
+            # always clean up temp file if created
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        # Summarize with Anthropic
+        summary = summarize_with_anthropic(transcript_text, prompt_choice)
+
+        # Response formatting
         if output_format == 'html':
-            formatted_summary = f"""
-            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
-                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{transcript_text}</div>
-                
-                <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({prompt_choice.replace('_', ' ').title()})</h3>
-                <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{summary}</div>
-                
-                <div style="margin-top: 15px; padding: 10px; background: #f0f8ff; border-radius: 5px; font-size: 0.9em; color: #666;">
-                    <strong>Transcript Source:</strong> {transcript_source if is_youtube else 'AssemblyAI Direct'}
-                </div>
-                
-                <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 2px solid #28a745;">
-                    <h4 style="color: #28a745; margin-bottom: 15px;">📁 Download Files</h4>
-                    <p style="margin-bottom: 10px;">Your transcript and summary are ready for download:</p>
-                    <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                        <a href="/download/{base_filename}.html" style="display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">📄 Download HTML</a>
-                        <a href="/download/{base_filename}.md" style="display: inline-block; padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">📝 Download Markdown</a>
-                    </div>
-                </div>
+            formatted = f"""
+            <div style="font-family: Arial, sans-serif; line-height:1.6; color:#333;">
+              <h3 style="color:#2c3e50;">📝 Full Transcript</h3>
+              <div style="background:#f8f9fa; padding:12px; border-radius:8px; white-space:pre-wrap;">{transcript_text}</div>
+              <h3 style="color:#2c3e50; margin-top:24px;">🎯 AI Summary</h3>
+              <div style="background:#e8f4fd; padding:12px; border-radius:8px; border-left:4px solid #3498db;">{summary}</div>
             </div>
             """
         else:
-            formatted_summary = summary
-        
-        response_data = {
+            formatted = summary
+
+        return jsonify({
             'success': True,
-            'transcript': formatted_summary,
+            'transcript': formatted,
             'raw_transcript': transcript_text,
             'summary': summary,
-            'message': 'Transcription and summarization completed successfully!',
-            'source_type': 'YouTube' if is_youtube else 'Direct URL',
-            'transcript_source': transcript_source if is_youtube else 'AssemblyAI Direct'
-        }
-        
-        # Add download links if files were generated
-        if base_filename:
-            response_data['download_links'] = {
-                'html': f"/download/{base_filename}.html",
-                'markdown': f"/download/{base_filename}.md"
-            }
-        
-        return jsonify(response_data)
-        
+            'message': 'Transcription and summarization completed.'
+        })
     except Exception as e:
-        print(f"Error in transcribe: {str(e)}")
         return jsonify({'error': str(e)}), 500
-    
-    finally:
-        # Clean up only the temporary audio file (keep output files for download)
-        if temp_audio_file and os.path.exists(temp_audio_file):
-            try:
-                os.unlink(temp_audio_file)
-                print(f"Cleaned up audio file: {temp_audio_file}")
-            except Exception as e:
-                print(f"Failed to clean up audio file {temp_audio_file}: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)
