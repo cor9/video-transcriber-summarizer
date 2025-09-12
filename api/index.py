@@ -383,7 +383,7 @@ def health():
         'assemblyai_configured': bool(os.getenv("ASSEMBLYAI_API_KEY")),
         'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
         'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY")),
-        'version': '2.1.0-anthropic-fix'
+        'version': '2.2.0-dropin-captions'
     })
 
 @app.route('/download/<filename>')
