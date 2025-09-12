@@ -55,6 +55,11 @@
 **Decision:** Replaced pytube with yt-dlp for better serverless compatibility, implemented lazy initialization for Anthropic client to avoid import errors, updated YouTube download function to use yt-dlp with proper error handling
 **Status:** Success
 
+## 2025-01-12
+**Issue:** YouTube blocking downloads with "Sign in to confirm you're not a bot" error
+**Decision:** Added proper HTTP headers and user agents to bypass bot detection, implemented retry logic and timeout settings, added helpful error messages and suggestions when YouTube blocks downloads, updated UI to warn users about potential restrictions
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 

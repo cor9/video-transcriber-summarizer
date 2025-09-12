@@ -6,6 +6,8 @@ import anthropic
 import yt_dlp
 import markdown
 import uuid
+import re
+from youtube_transcript_api import YouTubeTranscriptApi
 
 app = Flask(__name__)
 
@@ -23,6 +25,43 @@ if ASSEMBLYAI_API_KEY:
 
 # Initialize Anthropic client lazily to avoid import issues
 anthropic_client = None
+
+def extract_youtube_video_id(url):
+    """Extract YouTube video ID from various URL formats"""
+    patterns = [
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)',
+        r'youtube\.com\/v\/([^&\n?#]+)',
+        r'youtube\.com\/watch\?.*v=([^&\n?#]+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def get_youtube_transcript(video_id):
+    """Get transcript directly from YouTube captions"""
+    try:
+        # Try to get transcript in different languages
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try to get English transcript first
+        try:
+            transcript = transcript_list.find_transcript(['en'])
+            transcript_data = transcript.fetch()
+        except:
+            # If English not available, get the first available transcript
+            transcript = transcript_list.find_generated_transcripts(['en'])
+            transcript_data = transcript[0].fetch()
+        
+        # Convert transcript data to plain text
+        transcript_text = ' '.join([item['text'] for item in transcript_data])
+        
+        return transcript_text
+        
+    except Exception as e:
+        raise Exception(f"Failed to get YouTube transcript: {str(e)}")
 
 def download_audio_from_youtube(youtube_url):
     """Download audio from YouTube URL using yt-dlp with bot detection bypass"""
@@ -416,8 +455,8 @@ def index():
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
                         🎥 <strong>YouTube URLs supported!</strong><br>
                         ✅ Direct media: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        ✅ YouTube: Any public YouTube video URL<br>
-                        ⚠️ <em>Note: Some YouTube videos may be blocked by bot detection. If this happens, try a different video or use a direct media URL.</em>
+                        ✅ YouTube: Any public YouTube video URL (uses captions when available)<br>
+                        💡 <em>Smart fallback: Tries YouTube captions first, then audio download if needed</em>
                     </small>
                 </div>
 
@@ -574,38 +613,61 @@ def transcribe():
         transcript_text = ""
         
         if is_youtube:
-            # YouTube workflow: Download → Transcribe → Summarize
+            # YouTube workflow: Try captions first, then download if needed
             print(f"Processing YouTube URL: {video_url}")
             
+            # Extract video ID
+            video_id = extract_youtube_video_id(video_url)
+            if not video_id:
+                return jsonify({'error': 'Invalid YouTube URL format'}), 400
+            
+            transcript_text = ""
+            transcript_source = ""
+            
+            # Try to get transcript from YouTube captions first (faster and more reliable)
             try:
-                # Step 1: Download audio from YouTube
-                temp_audio_file = download_audio_from_youtube(video_url)
-                print(f"Downloaded audio to: {temp_audio_file}")
+                print("Attempting to get transcript from YouTube captions...")
+                transcript_text = get_youtube_transcript(video_id)
+                transcript_source = "YouTube Captions"
+                print("Successfully got transcript from YouTube captions")
                 
-                # Step 2: Transcribe local audio file
-                transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
-                print("Transcription completed")
+            except Exception as caption_error:
+                print(f"Failed to get captions: {str(caption_error)}")
+                print("Falling back to audio download and AssemblyAI transcription...")
                 
-            except Exception as e:
-                # Provide helpful error message for YouTube issues
-                if "blocking automated downloads" in str(e):
+                try:
+                    # Fallback: Download audio and transcribe with AssemblyAI
+                    temp_audio_file = download_audio_from_youtube(video_url)
+                    print(f"Downloaded audio to: {temp_audio_file}")
+                    
+                    transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
+                    transcript_source = "AssemblyAI Transcription"
+                    print("Transcription completed via AssemblyAI")
+                    
+                except Exception as download_error:
+                    # Both methods failed
+                    error_message = "Both YouTube captions and audio download failed."
+                    suggestions = [
+                        'This video may not have captions available',
+                        'Try a different YouTube video with captions',
+                        'Use a direct media URL instead (MP4, MP3, etc.)',
+                        'Check if the video is publicly accessible'
+                    ]
+                    
+                    if "blocking automated downloads" in str(download_error):
+                        error_message = "YouTube is blocking automated downloads and no captions are available."
+                        suggestions.insert(0, 'Try again later - sometimes the block is temporary')
+                    
                     return jsonify({
-                        'error': 'YouTube Download Blocked',
-                        'message': 'YouTube is blocking automated downloads for this video.',
-                        'suggestions': [
-                            'Try a different YouTube video',
-                            'Use a direct media URL instead (MP4, MP3, etc.)',
-                            'Download the video manually and upload to cloud storage',
-                            'Try again later - sometimes the block is temporary'
-                        ],
+                        'error': 'YouTube Processing Failed',
+                        'message': error_message,
+                        'suggestions': suggestions,
                         'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
                         'example_urls': [
                             'https://example.com/video.mp4',
                             'https://example.com/audio.mp3'
                         ]
                     }), 400
-                else:
-                    raise e
             
         else:
             # Direct URL workflow: Transcribe directly
@@ -648,6 +710,10 @@ def transcribe():
                 <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({prompt_choice.replace('_', ' ').title()})</h3>
                 <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{summary}</div>
                 
+                <div style="margin-top: 15px; padding: 10px; background: #f0f8ff; border-radius: 5px; font-size: 0.9em; color: #666;">
+                    <strong>Transcript Source:</strong> {transcript_source if is_youtube else 'AssemblyAI Direct'}
+                </div>
+                
                 <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 2px solid #28a745;">
                     <h4 style="color: #28a745; margin-bottom: 15px;">📁 Download Files</h4>
                     <p style="margin-bottom: 10px;">Your transcript and summary are ready for download:</p>
@@ -667,7 +733,8 @@ def transcribe():
             'raw_transcript': transcript_text,
             'summary': summary,
             'message': 'Transcription and summarization completed successfully!',
-            'source_type': 'YouTube' if is_youtube else 'Direct URL'
+            'source_type': 'YouTube' if is_youtube else 'Direct URL',
+            'transcript_source': transcript_source if is_youtube else 'AssemblyAI Direct'
         }
         
         # Add download links if files were generated
