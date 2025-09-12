@@ -2,5 +2,5 @@ Flask==2.3.3
 assemblyai==0.21.0
 anthropic==0.3.11
 httpx==0.24.1
-pytube==15.0.0
+yt-dlp==2023.12.30
 markdown==3.5.1

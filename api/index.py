@@ -3,7 +3,7 @@ import os
 import tempfile
 import assemblyai as aai
 import anthropic
-from pytube import YouTube
+import yt_dlp
 import markdown
 import uuid
 
@@ -20,25 +20,35 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Initialize API clients only if keys are available
 if ASSEMBLYAI_API_KEY:
     aai.settings.api_key = ASSEMBLYAI_API_KEY
-if ANTHROPIC_API_KEY:
-    anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Initialize Anthropic client lazily to avoid import issues
+anthropic_client = None
 
 def download_audio_from_youtube(youtube_url):
-    """Download audio from YouTube URL using pytube"""
+    """Download audio from YouTube URL using yt-dlp"""
     try:
-        yt = YouTube(youtube_url)
-        
-        # Get the best audio stream
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        if not audio_stream:
-            raise Exception("No audio stream found for this video")
-        
         # Create temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         temp_file.close()
         
-        # Download audio to temporary file
-        audio_stream.download(filename=temp_file.name)
+        # Configure yt-dlp options
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_file.name,
+            'extractaudio': True,
+            'audioformat': 'mp4',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        # Download audio
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+        
+        # Check if file was created and has content
+        if not os.path.exists(temp_file.name) or os.path.getsize(temp_file.name) == 0:
+            raise Exception("No audio stream found for this video")
         
         return temp_file.name
         
@@ -66,7 +76,15 @@ def transcribe_audio_with_assemblyai(audio_file_path):
 
 def summarize_with_anthropic(transcript_text, prompt_choice):
     """Generate summary using Anthropic Claude"""
+    global anthropic_client
+    
     try:
+        # Initialize Anthropic client if not already done
+        if anthropic_client is None:
+            if not ANTHROPIC_API_KEY:
+                raise Exception("ANTHROPIC_API_KEY not configured")
+            anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        
         prompt_templates = {
             "bullet_points": """
 Please summarize the following video transcript in clear, concise bullet points. Focus on the main topics, key insights, and important takeaways. Use bullet points for easy reading.
