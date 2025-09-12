@@ -48,60 +48,54 @@ def extract_youtube_video_id(url: str) -> str | None:
 
 def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en", "en-US", "en-GB")) -> str | None:
     """
-    Tries to fetch captions for a YouTube video via the official API.
+    Tries to fetch captions for a YouTube video using youtube-transcript-api.
     Returns plain text if found; otherwise None.
     """
-    if not YOUTUBE_API_KEY:
-        return None  # captions path disabled without API key
-
     vid = extract_youtube_video_id(youtube_url)
     if not vid:
         return None
 
-    service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-
-    # 1) List caption tracks
-    tracks = service.captions().list(part="id,snippet", videoId=vid).execute()
-    items = tracks.get("items", [])
-    if not items:
-        return None
-
-    # 2) Choose a track that matches our language priority (fallback to first)
-    def score(item):
-        lang = (item["snippet"].get("language") or "").lower()
+    try:
+        # Use youtube-transcript-api which doesn't require OAuth2
+        api = YouTubeTranscriptApi()
+        transcript_list = api.list(vid)
+        
+        # Try to get transcript in preferred language order
+        for lang in lang_priority:
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                transcript_data = transcript.fetch()
+                # Convert to plain text
+                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+                return text.strip() if text.strip() else None
+            except:
+                continue
+        
+        # If no preferred language found, try generated transcripts
         try:
-            return lang_priority.index(lang)
-        except ValueError:
-            return len(lang_priority) + 1
-
-    items.sort(key=score)
-    chosen = items[0]
-    caption_id = chosen["id"]
-
-    # 3) Download SRT (best for plain text)
-    # The captions().download endpoint returns binary; we request 'srt'
-    # googleapiclient supports "media_body" downloads via MediaIoBaseDownload, but here
-    # we can call the REST endpoint directly as it's simpler for SRT:
-    # https://www.googleapis.com/youtube/v3/captions/{id}?tfmt=srt&key=API_KEY
-    download_url = f"https://www.googleapis.com/youtube/v3/captions/{caption_id}?tfmt=srt&key={YOUTUBE_API_KEY}"
-    r = requests.get(download_url, timeout=30)
-    if r.status_code != 200 or not r.text.strip():
+            transcript = transcript_list.find_generated_transcript(['en'])
+            transcript_data = transcript.fetch()
+            text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+            return text.strip() if text.strip() else None
+        except:
+            pass
+        
+        # If still no luck, try any available transcript
+        try:
+            available_transcripts = list(transcript_list)
+            if available_transcripts:
+                transcript = available_transcripts[0]
+                transcript_data = transcript.fetch()
+                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+                return text.strip() if text.strip() else None
+        except:
+            pass
+            
         return None
-
-    srt_text = r.text
-    # 4) Strip SRT timestamps/indexes to plain text
-    # Simple SRT → text conversion
-    lines = []
-    for line in srt_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.isdigit():
-            continue
-        if "-->" in line:
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip() or None
+        
+    except Exception as e:
+        print(f"Error fetching YouTube captions: {str(e)}")
+        return None
 
 def get_youtube_transcript(video_id):
     """Get transcript directly from YouTube captions"""
