@@ -54,34 +54,43 @@ def get_gemini(model_name="gemini-1.5-flash"):
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
-def summarize_with_gemini(text: str, summary_format: str = "bullet_points") -> str:
-    """Robust Gemini summarization with detailed logging and retries"""
+def summarize_with_gemini(text: str, summary_format: str = "bullet_points"):
+    """Real Gemini summarization with timing and usage tracking"""
     import time
     import random
     
+    if not text or len(text) < 40:
+        raise ValueError("Transcript too short after cleaning.")
+
+    MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    genai.configure(api_key=_get_gemini_key())
+
     prompts = {
         "bullet_points": "Summarize in crisp bullet points with actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights with short headings + one sentence each.\n\nTranscript:\n{t}",
-        "detailed_summary": "Write a structured summary: purpose, key points, examples, conclusions, next steps.\n\nTranscript:\n{t}",
+        "key_insights":  "Extract key insights with short headings + one sentence each.\n\nTranscript:\n{t}",
+        "detailed_summary": "Structured summary: purpose, key points, examples, conclusions, next steps.\n\nTranscript:\n{t}",
     }
     prompt = prompts.get(summary_format, prompts["bullet_points"]).format(t=text[:200_000])
 
-    model = get_gemini("gemini-1.5-flash")
+    model = genai.GenerativeModel(MODEL_NAME)
     last_err = None
     for attempt in range(1, 4):
         t0 = time.time()
         try:
             resp = model.generate_content(prompt)
+            elapsed = round((time.time() - t0) * 1000)  # ms
             out = (resp.text or "").strip()
-            dur = round(time.time() - t0, 2)
-            print(f"[GEMINI] ok attempt={attempt} {dur}s chars={len(out)}")
-            if out:
-                return out
-            raise RuntimeError("Empty response from Gemini")
+            # Log truth serum
+            usage = getattr(resp, "usage_metadata", None)
+            print(f"[GEMINI] attempt={attempt} model={MODEL_NAME} ms={elapsed} "
+                  f"chars_out={len(out)} usage={usage}")
+            if not out:
+                raise RuntimeError("Empty response from Gemini")
+            return out, elapsed, usage
         except Exception as e:
             last_err = e
             print(f"[GEMINI] attempt={attempt} failed: {e}")
-            time.sleep(min(2**attempt + random.random(), 8))
+            time.sleep(min(2 ** attempt + random.random(), 8))
     raise RuntimeError(f"Gemini summarization failed: {last_err}")
 
 def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
@@ -127,24 +136,33 @@ def clean_paste(text: str) -> str:
     """Clean pasted text by removing Tactiq metadata and timestamps"""
     import re
     
-    cleaned = []
+    TACTIQ_GARBAGE = re.compile(
+        r"""^(?:\s*
+            (?:tactiq\.io.*|no\stitle\sfound|https?://(?:www\.)?youtube\.com/.*|
+             https?://youtu\.be/.*|No\s*text\s*$)
+        )""",
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+    TIME_AT_START = re.compile(r"^\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?(?:\s*-\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)?\s*")
+    TIME_INLINE   = re.compile(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?\b")
+
+    out = []
     for line in text.splitlines():
-        l = line.strip()
-        if not l: 
+        if TACTIQ_GARBAGE.match(line):
             continue
-        low = l.lower()
-        
-        # strip tactiq headers/URLs
-        if low.startswith("tactiq.io") or low.startswith("no title found"):
+        # remove leading timestamps
+        line = TIME_AT_START.sub("", line)
+        # kill orphan timing lines
+        if not line.strip():
             continue
-        if "youtube.com/watch" in low or "youtu.be/" in low:
-            continue
-            
-        # strip 00:00:00.000 / 00:00:00,000 at start
-        l = re.sub(r"^\d{2}:\d{2}:\d{2}[.,]\d{1,3}\s*", "", l)
-        
-        cleaned.append(l)
-    return "\n".join(cleaned).strip()
+        # optional: strip inline timecodes like "at 00:03:21,"
+        line = TIME_INLINE.sub("", line).strip()
+        if line:
+            out.append(line)
+    # collapse repeated spaces created by removing times
+    cleaned = re.sub(r"\s{2,}", " ", "\n".join(out)).strip()
+    return cleaned
 
 @app.route('/')
 def index():
@@ -454,9 +472,18 @@ def index():
                 
                 progress('Summarizing with Gemini...');
                 
+                if (!response.ok) {
+                    const err = await response.json().catch(()=>({error:`HTTP ${response.status}`}));
+                    throw new Error(err.error || `HTTP ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
                 if (data.success) {
+                    // Small UX buffer so it never looks "instant"
+                    const genMs = data?.metrics?.generation_ms || 0;
+                    await new Promise(r => setTimeout(r, Math.max(0, 900 - genMs)));
+                    
                     // Show results
                     document.getElementById('transcriptContent').innerHTML = data.transcript;
                     // Add download links if available
@@ -604,7 +631,9 @@ def process_video():
             if len(cleaned_text) < 50:
                 return jsonify({'success': False, 'error': 'Transcript paste didn\'t have usable text after cleaning.'}), 400
             base_id = str(uuid.uuid4())[:8]
-            summary_md = summarize_with_gemini(cleaned_text, summary_format)
+            
+            # Get summary with timing metrics
+            summary_md, gen_ms, usage = summarize_with_gemini(cleaned_text, summary_format)
             download_content = generate_download_content(base_id, cleaned_text, summary_md)
 
             # Generate download links with data URLs for serverless environment
@@ -616,15 +645,25 @@ def process_video():
             links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
             links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
+            MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
             body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
               <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (cleaned)</h3>
               <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{cleaned_text}</div>
               <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
               <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+              <div style="margin-top:10px;font-size:12px;color:#666">
+                Generated by {MODEL_NAME} in ~{gen_ms} ms
+              </div>
             </div>
             """
-            return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed pasted transcript.'})
+            return jsonify({
+                'success': True, 
+                'transcript': body, 
+                'download_links': links, 
+                'message': 'Processed pasted transcript.',
+                'metrics': {"model": MODEL_NAME, "generation_ms": gen_ms}
+            })
 
         # YouTube mode
         if not video_url or not video_url.startswith(('http://','https://')):
@@ -663,7 +702,8 @@ def process_video():
 
         base_id = str(uuid.uuid4())[:8]
 
-        summary_md = summarize_with_gemini(text, summary_format)
+        # Get summary with timing metrics
+        summary_md, gen_ms, usage = summarize_with_gemini(text, summary_format)
         download_content = generate_download_content(base_id, text, summary_md)
 
         # Generate download links with data URLs for serverless environment
@@ -675,15 +715,25 @@ def process_video():
         links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
         links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
+        MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
           <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{text}</div>
           <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
           <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+          <div style="margin-top:10px;font-size:12px;color:#666">
+            Generated by {MODEL_NAME} in ~{gen_ms} ms
+          </div>
             </div>
             """
-        return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed via YouTube captions.'})
+        return jsonify({
+            'success': True, 
+            'transcript': body, 
+            'download_links': links, 
+            'message': 'Processed via YouTube captions.',
+            'metrics': {"model": MODEL_NAME, "generation_ms": gen_ms}
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
