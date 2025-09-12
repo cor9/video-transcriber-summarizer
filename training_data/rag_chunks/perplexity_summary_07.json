@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_07",
+  "metadata": {
+    "id": "perplexity_summary_07",
+    "title": "Labs - Advanced Project Creation",
+    "section_number": 7,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 95,
+    "char_count": 784,
+    "chunk_type": "training_example"
+  },
+  "content": "**Purpose**: Labs allows creation of complex projects and applications from scratch.\n\n**Example**: \"Analyze my YouTube channel and identify patterns and trends that perform well.\"\n\n**Capabilities**:\n- **Interactive Dashboards**: Creates visual analytics dashboards\n- **Mini Applications**: Builds functional web applications\n- **Data Analysis**: Performs sophisticated data analysis\n- **Visualization**: Generates charts, graphs, and interactive elements\n\n**Output Quality**: \n- **Accuracy**: More accurate than general AI tools due to source grounding\n- **Insights**: Provides deeper insights with source-backed information\n- **Customization**: Highly customizable based on specific requirements\n\n**Integration**: Can connect with other tools and services for enhanced functionality.",
+  "title": "Labs - Advanced Project Creation"
+}

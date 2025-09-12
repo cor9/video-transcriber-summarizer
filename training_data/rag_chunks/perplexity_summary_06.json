@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_06",
+  "metadata": {
+    "id": "perplexity_summary_06",
+    "title": "Deep Research Mode",
+    "section_number": 6,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 107,
+    "char_count": 784,
+    "chunk_type": "training_example"
+  },
+  "content": "**Functionality**: Deep research mode provides comprehensive analysis with extended processing time (typically 3-8 minutes).\n\n**Use Cases**:\n- **Investment Research**: \"What are some breakout hardware companies that I can invest in 2025?\"\n- **Market Analysis**: Searches SEC filings and financial data\n- **Comprehensive Reports**: Creates detailed reports with multiple sources\n\n**Output Quality**:\n- **Source Count**: Uses 49+ different sources for comprehensive coverage\n- **Citation**: Everything is cited with specific sources\n- **Reduced Hallucinations**: More grounded in truth compared to other AI tools\n- **Export Options**: Can export as CSV, PDF, or markdown\n\n**Notification System**: Sends email notifications when research is complete, allowing you to work on other tasks.",
+  "title": "Deep Research Mode"
+}

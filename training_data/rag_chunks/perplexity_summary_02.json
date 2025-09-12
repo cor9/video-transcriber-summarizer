@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_02",
+  "metadata": {
+    "id": "perplexity_summary_02",
+    "title": "Core Interface Overview",
+    "section_number": 2,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 124,
+    "char_count": 893,
+    "chunk_type": "training_example"
+  },
+  "content": "**Main Chat Window**: Similar to ChatGPT or Gemini, but with specialized search functionality buttons:\n- **Search button**: For everyday questions\n- **Deep research**: For comprehensive topic exploration  \n- **Labs**: Allows creation of projects from scratch\n\n**Model Selection**: You can choose between different models:\n- **Sonar**: Perplexity's own model (recommended)\n- **Claude**: Anthropic's model\n- **Gemini**: Google's model\n- **GPT**: OpenAI's model\n- **Groq**: Alternative model option\n\n**Search Specificity**: The interface allows you to search more specifically based on your needs:\n- **Web**: General internet search\n- **Academic**: Academic papers and research\n- **Social**: Social media content\n- **Finance**: Financial data and SEC filings\n\n**Additional Features**: \n- File upload capability\n- Dictation and voice mode\n- Desktop app installation\n- Mobile apps (iOS and Android)",
+  "title": "Core Interface Overview"
+}

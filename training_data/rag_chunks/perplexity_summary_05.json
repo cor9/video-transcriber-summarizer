@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_05",
+  "metadata": {
+    "id": "perplexity_summary_05",
+    "title": "Intelligent Search Capabilities",
+    "section_number": 5,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 131,
+    "char_count": 944,
+    "chunk_type": "training_example"
+  },
+  "content": "**Grounded Search**: Perplexity performs actual web searches and reviews multiple sources, providing answers grounded in truth with source citations.\n\n**Example Use Case**: \"I'll be in San Francisco on September 2nd until the 6th. What are some must-see events, seasonal experiences or festivals during that time? Please include official links and tips for visitors.\"\n\n**Search Process**:\n1. **Source Gathering**: Looks at multiple websites and sources\n2. **Source Review**: Reviews and validates information from different sources\n3. **Citation**: Provides exact sources for each piece of information\n4. **Thought Process**: Shows the steps it took to reach conclusions\n\n**Advanced Features**:\n- **Opinions Integration**: Can include social media posts and Reddit discussions for nuanced advice\n- **Related Queries**: Suggests follow-up questions to explore topics deeper\n- **Space Creation**: Allows saving search threads for future reference",
+  "title": "Intelligent Search Capabilities"
+}

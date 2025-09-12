@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_04",
+  "metadata": {
+    "id": "perplexity_summary_04",
+    "title": "Spaces Tab - Specialized Chatbots",
+    "section_number": 4,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 87,
+    "char_count": 627,
+    "chunk_type": "training_example"
+  },
+  "content": "**Concept**: Similar to ChatGPT's GPTs or Claude's projects, Spaces are specialized chatbots with specific purposes.\n\n**Available Templates**:\n- **Stock Screener**: Ask questions about stocks in S&P 500, largest 5,000 US traded stocks, India traded stocks (updates weekly)\n- **Trip Planning**: Specialized for travel and itinerary creation\n- **Website Scanning**: Analyze and extract information from websites\n\n**Shared Threads**: You can see what other people are looking at using the same space, providing inspiration and community insights.\n\n**Customization**: Each space can be tailored to specific use cases and workflows.",
+  "title": "Spaces Tab - Specialized Chatbots"
+}

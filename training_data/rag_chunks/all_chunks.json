@@ -1,0 +1,206 @@
+[
+  {
+    "id": "perplexity_summary_01",
+    "metadata": {
+      "id": "perplexity_summary_01",
+      "title": "Introduction to Perplexity",
+      "section_number": 1,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 90,
+      "char_count": 667,
+      "chunk_type": "training_example"
+    },
+    "content": "**Core Definition**: Perplexity defines itself as an AI-powered Swiss Army knife for information discovery and curiosity. It's not just about answering questions—it's about empowering you to do more, whether you're looking to summarize content, explore new topics, or even get a little creative.\n\n**Key Positioning**: Basically, it's a general AI assistant that is grounded in truth. This makes it particularly valuable for research, learning, and decision-making where accuracy matters.\n\n**Unique Value Proposition**: Unlike traditional chatbots, Perplexity specializes in search functionality and provides source citations, making it ideal for research-heavy tasks.",
+    "title": "Introduction to Perplexity"
+  },
+  {
+    "id": "perplexity_summary_02",
+    "metadata": {
+      "id": "perplexity_summary_02",
+      "title": "Core Interface Overview",
+      "section_number": 2,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 124,
+      "char_count": 893,
+      "chunk_type": "training_example"
+    },
+    "content": "**Main Chat Window**: Similar to ChatGPT or Gemini, but with specialized search functionality buttons:\n- **Search button**: For everyday questions\n- **Deep research**: For comprehensive topic exploration  \n- **Labs**: Allows creation of projects from scratch\n\n**Model Selection**: You can choose between different models:\n- **Sonar**: Perplexity's own model (recommended)\n- **Claude**: Anthropic's model\n- **Gemini**: Google's model\n- **GPT**: OpenAI's model\n- **Groq**: Alternative model option\n\n**Search Specificity**: The interface allows you to search more specifically based on your needs:\n- **Web**: General internet search\n- **Academic**: Academic papers and research\n- **Social**: Social media content\n- **Finance**: Financial data and SEC filings\n\n**Additional Features**: \n- File upload capability\n- Dictation and voice mode\n- Desktop app installation\n- Mobile apps (iOS and Android)",
+    "title": "Core Interface Overview"
+  },
+  {
+    "id": "perplexity_summary_03",
+    "metadata": {
+      "id": "perplexity_summary_03",
+      "title": "Discovery Tab - Personalized News",
+      "section_number": 3,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 88,
+      "char_count": 672,
+      "chunk_type": "training_example"
+    },
+    "content": "**Core Functionality**: The Discovery tab provides personalized news creation with a \"For You\" section that curates content based on your interests.\n\n**Personalization Options**:\n- **Topics**: Add specific companies, stocks, or topics of interest\n- **Location**: Set your geographical location for relevant news\n- **Introduction**: Provide context about yourself for better personalization\n\n**Content Curation**: The system compiles information from multiple sources to provide comprehensive, unbiased understanding of current events.\n\n**Mobile Experience**: Optimized for mobile use, allowing you to stay updated on the go with summarized news and additional information.",
+    "title": "Discovery Tab - Personalized News"
+  },
+  {
+    "id": "perplexity_summary_04",
+    "metadata": {
+      "id": "perplexity_summary_04",
+      "title": "Spaces Tab - Specialized Chatbots",
+      "section_number": 4,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 87,
+      "char_count": 627,
+      "chunk_type": "training_example"
+    },
+    "content": "**Concept**: Similar to ChatGPT's GPTs or Claude's projects, Spaces are specialized chatbots with specific purposes.\n\n**Available Templates**:\n- **Stock Screener**: Ask questions about stocks in S&P 500, largest 5,000 US traded stocks, India traded stocks (updates weekly)\n- **Trip Planning**: Specialized for travel and itinerary creation\n- **Website Scanning**: Analyze and extract information from websites\n\n**Shared Threads**: You can see what other people are looking at using the same space, providing inspiration and community insights.\n\n**Customization**: Each space can be tailored to specific use cases and workflows.",
+    "title": "Spaces Tab - Specialized Chatbots"
+  },
+  {
+    "id": "perplexity_summary_05",
+    "metadata": {
+      "id": "perplexity_summary_05",
+      "title": "Intelligent Search Capabilities",
+      "section_number": 5,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 131,
+      "char_count": 944,
+      "chunk_type": "training_example"
+    },
+    "content": "**Grounded Search**: Perplexity performs actual web searches and reviews multiple sources, providing answers grounded in truth with source citations.\n\n**Example Use Case**: \"I'll be in San Francisco on September 2nd until the 6th. What are some must-see events, seasonal experiences or festivals during that time? Please include official links and tips for visitors.\"\n\n**Search Process**:\n1. **Source Gathering**: Looks at multiple websites and sources\n2. **Source Review**: Reviews and validates information from different sources\n3. **Citation**: Provides exact sources for each piece of information\n4. **Thought Process**: Shows the steps it took to reach conclusions\n\n**Advanced Features**:\n- **Opinions Integration**: Can include social media posts and Reddit discussions for nuanced advice\n- **Related Queries**: Suggests follow-up questions to explore topics deeper\n- **Space Creation**: Allows saving search threads for future reference",
+    "title": "Intelligent Search Capabilities"
+  },
+  {
+    "id": "perplexity_summary_06",
+    "metadata": {
+      "id": "perplexity_summary_06",
+      "title": "Deep Research Mode",
+      "section_number": 6,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 107,
+      "char_count": 784,
+      "chunk_type": "training_example"
+    },
+    "content": "**Functionality**: Deep research mode provides comprehensive analysis with extended processing time (typically 3-8 minutes).\n\n**Use Cases**:\n- **Investment Research**: \"What are some breakout hardware companies that I can invest in 2025?\"\n- **Market Analysis**: Searches SEC filings and financial data\n- **Comprehensive Reports**: Creates detailed reports with multiple sources\n\n**Output Quality**:\n- **Source Count**: Uses 49+ different sources for comprehensive coverage\n- **Citation**: Everything is cited with specific sources\n- **Reduced Hallucinations**: More grounded in truth compared to other AI tools\n- **Export Options**: Can export as CSV, PDF, or markdown\n\n**Notification System**: Sends email notifications when research is complete, allowing you to work on other tasks.",
+    "title": "Deep Research Mode"
+  },
+  {
+    "id": "perplexity_summary_07",
+    "metadata": {
+      "id": "perplexity_summary_07",
+      "title": "Labs - Advanced Project Creation",
+      "section_number": 7,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 95,
+      "char_count": 784,
+      "chunk_type": "training_example"
+    },
+    "content": "**Purpose**: Labs allows creation of complex projects and applications from scratch.\n\n**Example**: \"Analyze my YouTube channel and identify patterns and trends that perform well.\"\n\n**Capabilities**:\n- **Interactive Dashboards**: Creates visual analytics dashboards\n- **Mini Applications**: Builds functional web applications\n- **Data Analysis**: Performs sophisticated data analysis\n- **Visualization**: Generates charts, graphs, and interactive elements\n\n**Output Quality**: \n- **Accuracy**: More accurate than general AI tools due to source grounding\n- **Insights**: Provides deeper insights with source-backed information\n- **Customization**: Highly customizable based on specific requirements\n\n**Integration**: Can connect with other tools and services for enhanced functionality.",
+    "title": "Labs - Advanced Project Creation"
+  },
+  {
+    "id": "perplexity_summary_08",
+    "metadata": {
+      "id": "perplexity_summary_08",
+      "title": "Page Creation and Publishing",
+      "section_number": 8,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 91,
+      "char_count": 727,
+      "chunk_type": "training_example"
+    },
+    "content": "**Convert to Page**: Research results can be converted into beautifully formatted web pages.\n\n**Features**:\n- **Professional Layout**: Clean, structured presentation\n- **Media Integration**: Can add images, diagrams, and visual elements\n- **Section Management**: Add, edit, and customize different sections\n- **Publishing**: One-click publishing with shareable links\n\n**Use Cases**:\n- **Blog Articles**: Create professional blog posts\n- **Reports**: Generate comprehensive reports\n- **Documentation**: Create structured documentation\n- **Presentations**: Build presentation-ready content\n\n**Export Options**: \n- **PDF**: Download as PDF document\n- **Markdown**: Export in markdown format\n- **HTML**: Get HTML code for embedding",
+    "title": "Page Creation and Publishing"
+  },
+  {
+    "id": "perplexity_summary_09",
+    "metadata": {
+      "id": "perplexity_summary_09",
+      "title": "Model Flexibility and Access",
+      "section_number": 9,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 71,
+      "char_count": 515,
+      "chunk_type": "training_example"
+    },
+    "content": "**Multi-Model Access**: Access to top AI models without individual subscriptions:\n- **Cost Efficiency**: Pay once, access multiple models\n- **Model Selection**: Choose the best model for each task\n- **Geographic Access**: Works in regions where other AIs might be blocked\n- **No VPN Required**: Direct access without VPN in restricted areas\n\n**Model Switching**: Can switch between models mid-conversation for optimal results.\n\n**Pricing Advantage**: More cost-effective than subscribing to each model individually.",
+    "title": "Model Flexibility and Access"
+  },
+  {
+    "id": "perplexity_summary_10",
+    "metadata": {
+      "id": "perplexity_summary_10",
+      "title": "Practical Applications and Examples",
+      "section_number": 10,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 105,
+      "char_count": 846,
+      "chunk_type": "training_example"
+    },
+    "content": "**Travel Planning**: \n- **Real-time Information**: Get current events, weather, and recommendations\n- **Source Integration**: Combines official websites, social media, and local advice\n- **Itinerary Creation**: Builds comprehensive travel plans\n- **Space Saving**: Save research threads for future reference\n\n**Investment Research**:\n- **SEC Filings**: Access to financial documents and filings\n- **Market Analysis**: Comprehensive market research with citations\n- **Company Research**: Detailed company analysis and trends\n- **Data Export**: Export research as CSV for further analysis\n\n**Content Creation**:\n- **YouTube Analysis**: Analyze channel performance and trends\n- **Content Strategy**: Identify successful content patterns\n- **Audience Insights**: Understand audience preferences\n- **Competitive Analysis**: Compare with other channels",
+    "title": "Practical Applications and Examples"
+  },
+  {
+    "id": "perplexity_summary_11",
+    "metadata": {
+      "id": "perplexity_summary_11",
+      "title": "Key Advantages Over Competitors",
+      "section_number": 11,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 69,
+      "char_count": 577,
+      "chunk_type": "training_example"
+    },
+    "content": "**Source Grounding**: Unlike ChatGPT or Claude, Perplexity searches the web and provides source citations, reducing hallucinations.\n\n**Comprehensive Coverage**: Combines multiple sources for balanced, unbiased information.\n\n**Real-time Data**: Access to current information, not limited to training data cutoff.\n\n**Specialized Features**: Built-in tools for specific use cases (finance, academic, social).\n\n**Cost Efficiency**: Access to multiple models without individual subscriptions.\n\n**Geographic Accessibility**: Works in regions where other AI tools might be restricted.",
+    "title": "Key Advantages Over Competitors"
+  },
+  {
+    "id": "perplexity_summary_12",
+    "metadata": {
+      "id": "perplexity_summary_12",
+      "title": "Conclusion and Key Takeaways",
+      "section_number": 12,
+      "content_type": "Meeting Summary",
+      "source": "Tactiq Transcript",
+      "style": "Structured with bullets + conclusion",
+      "domain": "AI Tools / Productivity",
+      "word_count": 219,
+      "char_count": 1750,
+      "chunk_type": "training_example"
+    },
+    "content": "**Core Value**: Perplexity is more than a chatbot—it's a comprehensive research and productivity tool that combines AI capabilities with real-time web search.\n\n**Best Use Cases**:\n- **Research-heavy tasks** requiring source citations\n- **Current events** and real-time information\n- **Investment research** with financial data access\n- **Content creation** with comprehensive analysis\n- **Learning and exploration** with structured information\n\n**Key Differentiators**:\n- **Truth grounding** through source citations\n- **Multi-model access** without individual subscriptions\n- **Specialized search** capabilities\n- **Project creation** tools (Labs, Pages)\n- **Geographic accessibility** advantages\n\n**Recommendation**: Ideal for professionals, researchers, and content creators who need accurate, source-backed information and comprehensive analysis tools.\n\n---\n\n## Summary Bullets\n\n- **Perplexity AI** is an AI-powered research tool that combines chatbot functionality with real-time web search\n- **Core strength**: Provides source-cited, grounded answers rather than hallucinated responses\n- **Key features**: Deep research mode, Labs for project creation, Spaces for specialized chatbots, Page creation for publishing\n- **Model flexibility**: Access to multiple AI models (Sonar, Claude, Gemini, GPT) without individual subscriptions\n- **Specialized search**: Academic, financial, social, and general web search capabilities\n- **Geographic advantage**: Works in regions where other AI tools might be blocked\n- **Best for**: Research-heavy tasks, investment analysis, content creation, and real-time information gathering\n- **Unique value**: Combines AI intelligence with web search to provide accurate, comprehensive, and source-backed information",
+    "title": "Conclusion and Key Takeaways"
+  }
+]

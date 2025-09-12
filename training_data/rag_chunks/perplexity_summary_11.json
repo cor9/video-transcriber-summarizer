@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_11",
+  "metadata": {
+    "id": "perplexity_summary_11",
+    "title": "Key Advantages Over Competitors",
+    "section_number": 11,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 69,
+    "char_count": 577,
+    "chunk_type": "training_example"
+  },
+  "content": "**Source Grounding**: Unlike ChatGPT or Claude, Perplexity searches the web and provides source citations, reducing hallucinations.\n\n**Comprehensive Coverage**: Combines multiple sources for balanced, unbiased information.\n\n**Real-time Data**: Access to current information, not limited to training data cutoff.\n\n**Specialized Features**: Built-in tools for specific use cases (finance, academic, social).\n\n**Cost Efficiency**: Access to multiple models without individual subscriptions.\n\n**Geographic Accessibility**: Works in regions where other AI tools might be restricted.",
+  "title": "Key Advantages Over Competitors"
+}

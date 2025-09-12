@@ -1,0 +1,17 @@
+{
+  "id": "perplexity_summary_03",
+  "metadata": {
+    "id": "perplexity_summary_03",
+    "title": "Discovery Tab - Personalized News",
+    "section_number": 3,
+    "content_type": "Meeting Summary",
+    "source": "Tactiq Transcript",
+    "style": "Structured with bullets + conclusion",
+    "domain": "AI Tools / Productivity",
+    "word_count": 88,
+    "char_count": 672,
+    "chunk_type": "training_example"
+  },
+  "content": "**Core Functionality**: The Discovery tab provides personalized news creation with a \"For You\" section that curates content based on your interests.\n\n**Personalization Options**:\n- **Topics**: Add specific companies, stocks, or topics of interest\n- **Location**: Set your geographical location for relevant news\n- **Introduction**: Provide context about yourself for better personalization\n\n**Content Curation**: The system compiles information from multiple sources to provide comprehensive, unbiased understanding of current events.\n\n**Mobile Experience**: Optimized for mobile use, allowing you to stay updated on the go with summarized news and additional information.",
+  "title": "Discovery Tab - Personalized News"
+}
