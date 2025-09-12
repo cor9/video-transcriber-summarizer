@@ -137,24 +137,27 @@ def clean_paste(text: str) -> str:
     import re
     
     TACTIQ_GARBAGE = re.compile(
-        r"""^(?:\s*
+        r"""^(?:\s*#?\s*
             (?:tactiq\.io.*|no\stitle\sfound|https?://(?:www\.)?youtube\.com/.*|
              https?://youtu\.be/.*|No\s*text\s*$)
         )""",
         re.IGNORECASE | re.VERBOSE,
     )
+    
+    # Also match lines that start with # and contain tactiq garbage
+    TACTIQ_HEADER = re.compile(r"^\s*#.*(?:tactiq|no\s*title\s*found)", re.IGNORECASE)
 
-    TIME_AT_START = re.compile(r"^\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?(?:\s*-\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)?\s*")
+    TIME_AT_START = re.compile(r"^\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?(?:\s*-->\s*\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)?\s*")
     TIME_INLINE   = re.compile(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?\b")
 
     out = []
     for line in text.splitlines():
-        if TACTIQ_GARBAGE.match(line):
+        if TACTIQ_GARBAGE.match(line) or TACTIQ_HEADER.match(line):
             continue
         # remove leading timestamps
         line = TIME_AT_START.sub("", line)
-        # kill orphan timing lines
-        if not line.strip():
+        # kill orphan timing lines and arrows
+        if not line.strip() or line.strip() == "-->":
             continue
         # optional: strip inline timecodes like "at 00:03:21,"
         line = TIME_INLINE.sub("", line).strip()
@@ -728,7 +731,7 @@ def process_video():
             </div>
             """
         return jsonify({
-            'success': True, 
+            'success': True,
             'transcript': body, 
             'download_links': links, 
             'message': 'Processed via YouTube captions.',
