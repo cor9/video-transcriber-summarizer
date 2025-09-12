@@ -1,4 +1,4 @@
-import os, re, uuid, markdown
+import os, re, uuid, markdown, tempfile, json
 from flask import Flask, request, jsonify
 import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
@@ -59,96 +59,83 @@ def extract_video_id(url: str) -> str | None:
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
-def fetch_youtube_captions_text(video_url: str,
-                                prefer_langs=("en","en-US","en-GB"),
-                                fallback_translate_to="en"):
-    """
-    Robust captions fetch:
-    1) Try preferred languages directly.
-    2) List all transcripts; choose best match (manual > generated).
-    3) If not in preferred languages, try translating to English.
-    Returns: (text or None, diagnostics dict)
-    """
+# ---------- PRIMARY: robust youtube-transcript-api pull ----------
+def fetch_captions_primary(video_url: str,
+                           prefer_langs=("en","en-US","en-GB"),
+                           fallback_translate_to="en"):
     vid = extract_video_id(video_url)
     if not vid:
         return None, {"reason": "no_video_id"}
 
     diag = {"video_id": vid, "step": None, "chosen": None, "langs_found": [], "generated": None, "translated": False}
 
-    # STEP 1: quick path for preferred langs
+    # Quick path
     try:
         diag["step"] = "direct_preferred"
         entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(prefer_langs))
         text = "\n".join(e.get("text","") for e in entries if e.get("text")).strip() or None
         if text:
             diag["chosen"] = "preferred_direct"
-            diag["generated"] = None  # unknown in this path
             return text, diag
     except (NoTranscriptFound, TranscriptsDisabled):
-        pass  # fall through
+        pass
     except Exception as e:
-        # keep going; we'll try list-based
         diag["direct_error"] = str(e)
 
-    # STEP 2: enumerate all transcripts and choose best
+    # List and choose
     try:
         diag["step"] = "list_transcripts"
         tlist = YouTubeTranscriptApi.list_transcripts(vid)
-
-        # Gather info
         available = []
         for t in tlist:
-            info = {
-                "language": t.language_code,
-                "is_generated": t.is_generated,
-                "is_translatable": t.is_translatable
-            }
-            available.append(info)
+            available.append({"language": t.language_code, "is_generated": t.is_generated, "is_translatable": t.is_translatable})
         diag["langs_found"] = available
 
-        # Prefer: a) manual in preferred langs, b) generated in preferred langs
         def rank(t):
-            # Lower is better
-            pref_index = (list(prefer_langs)+["~"]).index(t.language_code) if t.language_code in prefer_langs else len(prefer_langs)+1
-            manual_bonus = 0 if not t.is_generated else 1  # manual (0) beats generated (1)
+            try:
+                pref_index = list(prefer_langs).index(t.language_code)
+            except ValueError:
+                pref_index = len(prefer_langs) + 1
+            manual_bonus = 0 if not t.is_generated else 1   # manual wins
             return (pref_index, manual_bonus)
 
-        # Try to find a direct non-translated candidate first
         candidates = sorted(list(tlist), key=rank)
+
+        # a) same-language best candidate
         for cand in candidates:
             if cand.language_code in prefer_langs:
-                diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
-                diag["generated"] = cand.is_generated
-                text = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
-                if text:
-                    return text, diag
+                txt = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+                if txt:
+                    diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
+                    diag["generated"] = cand.is_generated
+                    return txt, diag
 
-        # STEP 3: translate a non-preferred language if possible
+        # b) translate non-preferred if allowed
         if fallback_translate_to:
             for cand in candidates:
                 if getattr(cand, "is_translatable", False):
                     try:
                         t = cand.translate(fallback_translate_to).fetch()
-                        text = "\n".join(x.get("text","") for x in t if x.get("text")).strip() or None
-                        if text:
+                        txt = "\n".join(x.get("text","") for x in t if x.get("text")).strip() or None
+                        if txt:
                             diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
                             diag["generated"] = cand.is_generated
                             diag["translated"] = True
-                            return text, diag
+                            return txt, diag
                     except Exception as te:
                         diag.setdefault("translate_errors", []).append(str(te))
 
-        # If still nothing, try "any manual then any generated" in any language
+        # c) any manual, then any generated
         any_manual = [t for t in tlist if not t.is_generated]
         any_generated = [t for t in tlist if t.is_generated]
         for bucket in (any_manual, any_generated):
             for cand in bucket:
                 try:
-                    text = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
-                    if text:
+                    txt = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+                    if txt:
                         diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
                         diag["generated"] = cand.is_generated
-                        return text, diag
+                        return txt, diag
                 except Exception as fe:
                     diag.setdefault("fetch_errors", []).append(str(fe))
 
@@ -166,6 +153,78 @@ def fetch_youtube_captions_text(video_url: str,
         return None, {**diag, "reason": "retrieve_failed"}
     except Exception as e:
         return None, {**diag, "reason": f"unexpected:{e}"}
+
+# ---------- FALLBACK: yt-dlp subtitle pull (no video download) ----------
+def fetch_captions_fallback_ytdlp(video_url: str, prefer_langs=("en","en-US","en-GB")):
+    """
+    Uses yt-dlp to fetch subtitles in SRT without downloading the media.
+    Works on many cases where transcript API fails.
+    """
+    try:
+        import yt_dlp
+    except Exception as e:
+        return None, {"reason": f"yt_dlp_missing:{e}"}
+
+    ytid = extract_video_id(video_url) or str(uuid.uuid4())[:8]
+    tmpdir = tempfile.mkdtemp(prefix="subs_")
+    # allow 'en' and 'en-*', and auto subs
+    sub_langs = ",".join(list(dict.fromkeys(list(prefer_langs)+["en.*","en"])))
+
+    ydl_opts = {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitlesformat": "srt",
+        "subtitleslangs": [sub_langs],
+        "paths": {"home": tmpdir, "temp": tmpdir},
+        "outtmpl": os.path.join(tmpdir, "%(id)s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            # Force download of only subs
+            ydl.download([video_url])
+    except Exception as e:
+        return None, {"reason": f"yt_dlp_extract:{e}"}
+
+    # Find an SRT in tmpdir
+    srt_text = None
+    try:
+        for fname in os.listdir(tmpdir):
+            if fname.startswith(ytid) and fname.endswith(".srt"):
+                with open(os.path.join(tmpdir, fname), "r", encoding="utf-8", errors="ignore") as f:
+                    srt_text = f.read()
+                break
+    except Exception as e:
+        return None, {"reason": f"read_srt:{e}"}
+
+    if not srt_text:
+        return None, {"reason": "no_srt_output"}
+
+    # SRT → plain text
+    lines = []
+    for line in srt_text.splitlines():
+        line = line.strip()
+        if not line: continue
+        if line.isdigit(): continue
+        if "-->" in line: continue
+        lines.append(line)
+    text = "\n".join(lines).strip() or None
+    return text, {"used": "yt_dlp", "tmpdir": tmpdir}
+
+# ---------- Wrapper: try primary, then fallback ----------
+def fetch_youtube_captions_text(video_url: str):
+    text, diag = fetch_captions_primary(video_url)
+    if text:
+        return text, {**diag, "path": "primary"}
+    # Only fallback if clearly public but primary failed
+    alt, ydiag = fetch_captions_fallback_ytdlp(video_url)
+    if alt:
+        return alt, {"path": "yt_dlp", **ydiag}
+    return None, {"path": "none", "primary": diag, "fallback": ydiag}
 
 def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
     model = get_gemini("gemini-1.5-flash")
@@ -474,9 +533,9 @@ def index():
                         errorMessage += '<br><strong>Fixes:</strong><ul>';
                         data.fixes.forEach(fix => {
                             errorMessage += '<li>' + fix + '</li>';
-                        });
-                        errorMessage += '</ul>';
-                    }
+                            });
+                            errorMessage += '</ul>';
+                        }
                     if (data.why) {
                         errorMessage += '<br><strong>Why:</strong> ' + data.why;
                     }
@@ -500,7 +559,7 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.1.1-clean-deployment'
+        'version': '4.2.0-robust-captions'
     })
 
 @app.route('/process', methods=['POST'])
@@ -573,15 +632,15 @@ def process_video():
         links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
         body = f"""
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
           <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{text}</div>
           <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
           <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
-        </div>
-        """
+            </div>
+            """
         return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed via YouTube captions.'})
-
+        
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
