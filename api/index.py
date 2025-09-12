@@ -378,7 +378,7 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.3.0-resilient-captions'
+        'version': '4.3.1-vercel-compatible'
     })
 
 @app.route('/upload_subs', methods=['POST'])
