@@ -572,6 +572,7 @@ def upload_subs():
             # For TXT files, just clean the text (remove Tactiq garbage if present)
             text = clean_paste(content).strip()
         else:
+            # For SRT/VTT files, parse subtitle content
             # For SRT/VTT files, parse subtitle content to plain text
             lines = []
             for line in content.splitlines():
