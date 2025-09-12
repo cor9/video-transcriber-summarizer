@@ -1,5 +1,5 @@
 Flask==2.3.3
-anthropic==0.3.11
+anthropic==0.67.0
 assemblyai==0.21.0
 httpx==0.24.1
 markdown==3.5.1
