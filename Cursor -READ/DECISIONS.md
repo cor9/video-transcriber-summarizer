@@ -65,6 +65,11 @@
 **Decision:** Implemented YouTube captions fallback using youtube-transcript-api, created smart fallback system that tries captions first then audio download, added video ID extraction from various URL formats, enhanced error handling with multiple fallback options, updated UI to show transcript source information
 **Status:** Success
 
+## 2025-01-12
+**Issue:** YouTube videos being blocked with bot detection affecting both captions and audio download
+**Decision:** Implemented comprehensive video accessibility checking before processing, added specific error handling for different failure types (private videos, no captions, bot blocking), enhanced user guidance with targeted suggestions, created video accessibility validation function, improved error messages and fallback strategies
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 
