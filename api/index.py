@@ -46,12 +46,43 @@ def fetch_youtube_transcript_text(video_url: str, languages=("en", "en-US", "en-
     if not vid:
         return None
     try:
-        # Fetch transcript entries (list of dicts with 'text', 'start', 'duration')
-        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        # Join lines
-        return "\n".join([item["text"] for item in transcript_list if item.get("text")]).strip() or None
-    except (TranscriptsDisabled, NoTranscriptFound):
+        # Use the correct API
+        api = YouTubeTranscriptApi()
+        transcript_list = api.list(vid)
+        
+        # Try to get transcript in preferred language order
+        for lang in languages:
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                transcript_data = transcript.fetch()
+                # Convert to plain text
+                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+                return text.strip() if text.strip() else None
+            except:
+                continue
+        
+        # If no preferred language found, try generated transcripts
+        try:
+            transcript = transcript_list.find_generated_transcript(['en'])
+            transcript_data = transcript.fetch()
+            text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+            return text.strip() if text.strip() else None
+        except:
+            pass
+        
+        # If still no transcript, try any available transcript
+        try:
+            available_transcripts = list(transcript_list)
+            if available_transcripts:
+                transcript = available_transcripts[0]
+                transcript_data = transcript.fetch()
+                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
+                return text.strip() if text.strip() else None
+        except:
+            pass
+            
         return None
+        
     except Exception:
         return None
 
