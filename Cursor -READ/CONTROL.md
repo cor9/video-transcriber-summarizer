@@ -50,64 +50,75 @@ Cursor must consult `context.md` before making assumptions. Keep it current.
 
 # Project Context
 
-Project: Prep101 (Child Actor 101)  
-Goal: Convert PDF sides + metadata (role, genre, type, etc.) into a styled HTML audition prep guide email.
+Project: VidScribe2AI - AI Video Transcription & Summarization Platform
+Goal: Transform any video/audio into structured summaries with AI-powered transcription using AssemblyAI and Anthropic Claude
 
 ## Pipelines
-- Airtable → (record with PDF + fields) → n8n worker → OpenAI Assistant → HTML guide → Gmail/Airtable Automations.
+- User uploads video/audio URL → AssemblyAI transcription → Anthropic Claude summarization → Formatted HTML output
+- Direct media file URLs (MP4, MP3, WAV, etc.) supported
+- YouTube URLs require pre-processing (download audio first)
 
 ## Constraints
-- HTML-only emails, inlined styles; no external CSS.
-- Guides must include Uta Hagen 9Q + genre-aware sections (comedy beats, etc.).
-- Depth must match "Henry" example.
+- Vercel serverless environment (no persistent storage)
+- AssemblyAI doesn't support YouTube URLs directly
+- Must use compatible Python packages for serverless deployment
+- HTML-only output with inline CSS styling
 
 ## Open Issues (update daily)
-- [ ] Retry policy for Assistant timeouts
-- [ ] HTML template unit tests (schema & critical sections)
+- [x] Vercel deployment crashes (FIXED - removed conflicting app.py)
+- [x] YouTube URL support (FIXED - clear error messaging with alternatives)
+- [x] Static asset loading (FIXED - proper vercel.json routing)
+- [x] API key configuration (FIXED - environment variables working)
+- [x] Template rendering issues (FIXED - embedded HTML directly)
 
 ---
 
-# Current Implementation Context (2025-01-27)
-**Note: Current codebase differs from intended architecture**
+# Current Implementation Context (2025-01-12)
 
 ## What's Actually Built
-- React frontend (not Next.js 14)
-- Express.js backend with PostgreSQL (not Airtable + Supabase)
-- Direct PDF processing with OCR (not n8n worker pipeline)
-- Web-based guide generation and viewing (not email-only output)
-- User authentication and account management system
-- Guide storage and retrieval from database
+- Flask application deployed on Vercel as serverless function
+- Direct HTML embedding (no template files) to avoid path issues
+- AssemblyAI integration for video/audio transcription
+- Anthropic Claude integration for AI summarization
+- Beautiful dark gradient UI with sitelogo.svg branding
+- Comprehensive error handling and user guidance
 
 ## Key Components Working
-- PDF upload and text extraction
-- Guide generation with RAG methodology
-- User authentication and authorization
-- Guide persistence in PostgreSQL
-- Account management interface
+- Main page loads successfully (200 OK)
+- Health endpoint reports API key status
+- Transcribe endpoint processes direct media URLs
+- Static assets (favicon.ico, sitelogo.svg) load properly
+- YouTube URL detection with helpful error messages
+- Multiple summary formats (bullet points, key insights, detailed)
+- Auto-deployment from GitHub commits
 
 ## Recent Fixes Applied
-- Fixed authentication token passing in FileUpload
-- Resolved guide database saving issues
-- Updated Account page to show real guides
-- Enhanced error handling and user feedback
+- Removed conflicting app.py file that was causing Vercel crashes
+- Added missing request import to Flask app
+- Implemented proper YouTube URL detection and user guidance
+- Updated UI messaging to be accurate about supported formats
+- Enhanced error handling with structured responses and suggestions
+- Fixed static asset serving through vercel.json routing
 
 ## Architecture Decision Needed
-- Migrate to intended Next.js + Airtable architecture?
-- Or update project rules to reflect current working implementation?
-- Current system is functional but doesn't match documented architecture
+- Consider adding YouTube audio extraction service for better UX
+- Evaluate adding user authentication for saved transcripts
+- Consider adding batch processing capabilities
 
+### Environment notes
+- Python: 3.9 (Vercel default)
+- Flask: 2.3.3
+- AssemblyAI: 0.21.0
+- Anthropic: 0.3.11 (pinned for compatibility)
+- httpx: 0.24.1 (pinned for compatibility)
+- Hosting: Vercel serverless functions
+- Domain: vidscribe2ai.site
 
-### Legacy environment notes (confirm/adjust)
-- Node: v18 (confirm)
-- NPM: v9 (confirm)
-- Environment files (confirm paths):
-  - /prep101/prep101-app/prep101-backend/server/.env
-  - /prep101/prep101-app/prep101-backend/.env
-  - /prep101/prep101-app/prep101-backend/client/.env
-- Hosting: Netlify SPA redirects (legacy). Current: React+Express stack with PostgreSQL (confirm).
-
-### Known resolution to reference
-- ECONNRESET during npm install → solved previously by pinning Node v18 + NPM v9 (legacy build path).
+### Known resolutions to reference
+- Vercel 500 errors → solved by removing conflicting app.py and using api/index.py structure
+- Anthropic compatibility → solved by pinning anthropic==0.3.11 and httpx==0.24.1
+- Template rendering → solved by embedding HTML directly in Flask route
+- Static assets 404 → solved by proper vercel.json routing configuration
 
 ---
 

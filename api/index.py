@@ -1,7 +1,11 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 import os
+import tempfile
 import assemblyai as aai
 import anthropic
+from pytube import YouTube
+import markdown
+import uuid
 
 app = Flask(__name__)
 
@@ -9,11 +13,192 @@ app = Flask(__name__)
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# Create output directory for generated files
+OUTPUT_DIR = "/tmp/vidscribe_outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 # Initialize API clients only if keys are available
 if ASSEMBLYAI_API_KEY:
     aai.settings.api_key = ASSEMBLYAI_API_KEY
 if ANTHROPIC_API_KEY:
     anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+def download_audio_from_youtube(youtube_url):
+    """Download audio from YouTube URL using pytube"""
+    try:
+        yt = YouTube(youtube_url)
+        
+        # Get the best audio stream
+        audio_stream = yt.streams.filter(only_audio=True).first()
+        if not audio_stream:
+            raise Exception("No audio stream found for this video")
+        
+        # Create temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        temp_file.close()
+        
+        # Download audio to temporary file
+        audio_stream.download(filename=temp_file.name)
+        
+        return temp_file.name
+        
+    except Exception as e:
+        raise Exception(f"Failed to download YouTube audio: {str(e)}")
+
+def transcribe_audio_with_assemblyai(audio_file_path):
+    """Transcribe local audio file using AssemblyAI"""
+    try:
+        # Upload file to AssemblyAI
+        with open(audio_file_path, 'rb') as f:
+            transcript = aai.Transcriber().transcribe(f)
+        
+        # Wait for transcription to complete
+        while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
+            transcript = aai.Transcriber().get_transcript(transcript.id)
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            raise Exception(f"Transcription failed: {transcript.error}")
+        
+        return transcript.text
+        
+    except Exception as e:
+        raise Exception(f"Transcription failed: {str(e)}")
+
+def summarize_with_anthropic(transcript_text, prompt_choice):
+    """Generate summary using Anthropic Claude"""
+    try:
+        prompt_templates = {
+            "bullet_points": """
+Please summarize the following video transcript in clear, concise bullet points. Focus on the main topics, key insights, and important takeaways. Use bullet points for easy reading.
+
+Transcript:
+{transcript}
+""",
+            "key_insights": """
+Analyze the following video transcript and extract the most important insights, lessons, and actionable information. Present your findings in a structured format with clear headings.
+
+Transcript:
+{transcript}
+""",
+            "detailed_summary": """
+Provide a comprehensive summary of the following video transcript. Include:
+1. Main topic and purpose
+2. Key points discussed
+3. Important details and examples
+4. Conclusions or takeaways
+
+Transcript:
+{transcript}
+"""
+        }
+        
+        prompt = prompt_templates.get(prompt_choice, prompt_templates["bullet_points"])
+        prompt = prompt.format(transcript=transcript_text)
+        
+        response = anthropic_client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        return response.content[0].text
+        
+    except Exception as e:
+        raise Exception(f"Summarization failed: {str(e)}")
+
+def generate_output_files(summary_text, transcript_text, filename_prefix="transcript"):
+    """Generate Markdown and HTML files from summary text and save to output directory"""
+    try:
+        # Generate unique filename
+        unique_id = str(uuid.uuid4())[:8]
+        base_filename = f"{filename_prefix}_{unique_id}"
+        
+        # Create file paths in output directory
+        md_file_path = os.path.join(OUTPUT_DIR, f"{base_filename}.md")
+        html_file_path = os.path.join(OUTPUT_DIR, f"{base_filename}.html")
+        
+        # Write Markdown file with both transcript and summary
+        with open(md_file_path, 'w', encoding='utf-8') as md_file:
+            md_file.write(f"# {filename_prefix.title()} Summary\n\n")
+            md_file.write(f"**Generated on:** {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            md_file.write("## Full Transcript\n\n")
+            md_file.write(transcript_text)
+            md_file.write("\n\n## AI Summary\n\n")
+            md_file.write(summary_text)
+        
+        # Convert to HTML and write
+        html_content = markdown.markdown(summary_text)
+        transcript_html = markdown.markdown(transcript_text)
+        
+        with open(html_file_path, 'w', encoding='utf-8') as html_file:
+            html_file.write(f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{filename_prefix.title()} Summary</title>
+    <style>
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 1000px; 
+            margin: 0 auto; 
+            padding: 20px;
+            background: #f8f9fa;
+        }}
+        .container {{
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }}
+        h1, h2, h3 {{ color: #2c3e50; }}
+        .transcript {{ 
+            background: #f8f9fa; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0;
+            border-left: 4px solid #6c757d;
+        }}
+        .summary {{ 
+            background: #e8f4fd; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0;
+            border-left: 4px solid #3498db;
+        }}
+        .meta {{
+            color: #6c757d;
+            font-size: 0.9em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 {filename_prefix.title()} Summary</h1>
+        <div class="meta">
+            <strong>Generated on:</strong> {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        </div>
+        
+        <h2>📝 Full Transcript</h2>
+        <div class="transcript">{transcript_html}</div>
+        
+        <h2>🎯 AI Summary</h2>
+        <div class="summary">{html_content}</div>
+    </div>
+</body>
+</html>
+            """)
+        
+        return md_file_path, html_file_path, base_filename
+        
+    except Exception as e:
+        raise Exception(f"File generation failed: {str(e)}")
 
 @app.route('/')
 def index():
@@ -189,12 +374,22 @@ def index():
             <form id="transcribeForm">
                 <div class="form-group">
                     <label for="videoUrl">Video/Audio URL</label>
-                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://example.com/video.mp4 or https://example.com/audio.mp3" required>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
-                        📹 <strong>Direct media URLs only</strong> - No YouTube links<br>
-                        ✅ Supports: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
-                        💡 <em>For YouTube videos, download the audio first and upload to cloud storage</em>
+                        🎥 <strong>YouTube URLs now supported!</strong><br>
+                        ✅ Direct media: MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
+                        ✅ YouTube: Any public YouTube video URL<br>
+                        💡 <em>Processing may take longer for YouTube videos due to download time</em>
                     </small>
+                </div>
+
+                <div class="form-group">
+                    <label for="summaryFormat">Summary Format</label>
+                    <select id="summaryFormat" name="summaryFormat" style="width: 100%; padding: 15px; border: 2px solid #e1e8ed; border-radius: 8px; font-size: 16px;">
+                        <option value="bullet_points">📝 Bullet Points</option>
+                        <option value="key_insights">💡 Key Insights</option>
+                        <option value="detailed_summary">📋 Detailed Summary</option>
+                    </select>
                 </div>
 
                 <button type="submit" class="submit-btn" id="submitBtn">
@@ -216,6 +411,7 @@ def index():
             e.preventDefault();
             
             const videoUrl = document.getElementById('videoUrl').value;
+            const summaryFormat = document.getElementById('summaryFormat').value;
             
             // Show loading state
             document.getElementById('submitBtn').disabled = true;
@@ -231,7 +427,7 @@ def index():
                     },
                     body: JSON.stringify({
                         video_url: videoUrl,
-                        prompt_choice: 'bullet_points',
+                        prompt_choice: summaryFormat,
                         output_format: 'html'
                     })
                 });
@@ -285,8 +481,34 @@ def health():
         'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY"))
     })
 
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Download generated HTML or MD files"""
+    try:
+        file_path = os.path.join(OUTPUT_DIR, filename)
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Determine MIME type based on file extension
+        if filename.endswith('.html'):
+            mimetype = 'text/html'
+        elif filename.endswith('.md'):
+            mimetype = 'text/markdown'
+        else:
+            mimetype = 'application/octet-stream'
+        
+        return send_file(file_path, as_attachment=True, download_name=filename, mimetype=mimetype)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
+    """Main transcription endpoint implementing the schema workflow"""
+    temp_audio_file = None
+    temp_md_file = None
+    temp_html_file = None
+    
     try:
         # Check if API keys are available
         if not os.getenv("ASSEMBLYAI_API_KEY"):
@@ -311,75 +533,50 @@ def transcribe():
         youtube_domains = ['youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com']
         is_youtube = any(domain in video_url for domain in youtube_domains)
         
+        transcript_text = ""
+        
         if is_youtube:
-            return jsonify({
-                'error': 'YouTube URLs are not directly supported. Please use one of these alternatives:',
-                'suggestions': [
-                    '1. Download the video audio using a YouTube downloader tool',
-                    '2. Use a service like yt-dlp to extract the audio URL',
-                    '3. Upload the audio file to a cloud storage service and provide the direct link',
-                    '4. Try a different video/audio file with a direct URL (MP4, MP3, etc.)'
-                ],
-                'supported_formats': 'MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC',
-                'example_urls': [
-                    'https://example.com/video.mp4',
-                    'https://example.com/audio.mp3'
-                ]
-            }), 400
+            # YouTube workflow: Download → Transcribe → Summarize
+            print(f"Processing YouTube URL: {video_url}")
+            
+            # Step 1: Download audio from YouTube
+            temp_audio_file = download_audio_from_youtube(video_url)
+            print(f"Downloaded audio to: {temp_audio_file}")
+            
+            # Step 2: Transcribe local audio file
+            transcript_text = transcribe_audio_with_assemblyai(temp_audio_file)
+            print("Transcription completed")
+            
+        else:
+            # Direct URL workflow: Transcribe directly
+            print(f"Processing direct URL: {video_url}")
+            transcript = aai.Transcriber().transcribe(video_url)
+            
+            # Wait for transcription to complete
+            while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
+                transcript = aai.Transcriber().get_transcript(transcript.id)
+            
+            if transcript.status == aai.TranscriptStatus.error:
+                return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
+            
+            transcript_text = transcript.text
+            print("Transcription completed")
         
-        # Transcribe with AssemblyAI
-        print(f"Starting transcription for URL: {video_url}")
-        transcript = aai.Transcriber().transcribe(video_url)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
-        
-        # Wait for transcription to complete
-        while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
-            transcript = aai.Transcriber().get_transcript(transcript.id)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            return jsonify({'error': f'Transcription failed: {transcript.error}'}), 500
-        
-        transcript_text = transcript.text
-        
-        # Generate summary with Anthropic
-        prompt_templates = {
-            "bullet_points": """
-Please summarize the following video transcript in clear, concise bullet points. Focus on the main topics, key insights, and important takeaways. Use bullet points for easy reading.
-
-Transcript:
-{transcript}
-""",
-            "key_insights": """
-Analyze the following video transcript and extract the most important insights, lessons, and actionable information. Present your findings in a structured format with clear headings.
-
-Transcript:
-{transcript}
-""",
-            "detailed_summary": """
-Provide a comprehensive summary of the following video transcript. Include:
-1. Main topic and purpose
-2. Key points discussed
-3. Important details and examples
-4. Conclusions or takeaways
-
-Transcript:
-{transcript}
-"""
-        }
-        
-        prompt = prompt_templates.get(prompt_choice, prompt_templates["bullet_points"])
-        prompt = prompt.format(transcript=transcript_text)
-        
+        # Step 3: Generate summary with Anthropic
         print("Generating summary with Anthropic...")
-        response = anthropic_client.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        summary = summarize_with_anthropic(transcript_text, prompt_choice)
+        print("Summary generated")
         
-        summary = response.content[0].text
+        # Step 4: Generate output files for download
+        md_file_path = None
+        html_file_path = None
+        base_filename = None
+        
+        try:
+            md_file_path, html_file_path, base_filename = generate_output_files(summary, transcript_text, "transcript")
+            print(f"Generated files: {md_file_path}, {html_file_path}")
+        except Exception as e:
+            print(f"File generation failed (non-critical): {str(e)}")
         
         # Format response based on output format
         if output_format == 'html':
@@ -388,24 +585,52 @@ Transcript:
                 <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
                 <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{transcript_text}</div>
                 
-                <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary</h3>
+                <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({prompt_choice.replace('_', ' ').title()})</h3>
                 <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{summary}</div>
+                
+                <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 2px solid #28a745;">
+                    <h4 style="color: #28a745; margin-bottom: 15px;">📁 Download Files</h4>
+                    <p style="margin-bottom: 10px;">Your transcript and summary are ready for download:</p>
+                    <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                        <a href="/download/{base_filename}.html" style="display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">📄 Download HTML</a>
+                        <a href="/download/{base_filename}.md" style="display: inline-block; padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">📝 Download Markdown</a>
+                    </div>
+                </div>
             </div>
             """
         else:
             formatted_summary = summary
         
-        return jsonify({
+        response_data = {
             'success': True,
             'transcript': formatted_summary,
             'raw_transcript': transcript_text,
             'summary': summary,
-            'message': 'Transcription and summarization completed successfully!'
-        })
+            'message': 'Transcription and summarization completed successfully!',
+            'source_type': 'YouTube' if is_youtube else 'Direct URL'
+        }
+        
+        # Add download links if files were generated
+        if base_filename:
+            response_data['download_links'] = {
+                'html': f"/download/{base_filename}.html",
+                'markdown': f"/download/{base_filename}.md"
+            }
+        
+        return jsonify(response_data)
         
     except Exception as e:
         print(f"Error in transcribe: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    
+    finally:
+        # Clean up only the temporary audio file (keep output files for download)
+        if temp_audio_file and os.path.exists(temp_audio_file):
+            try:
+                os.unlink(temp_audio_file)
+                print(f"Cleaned up audio file: {temp_audio_file}")
+            except Exception as e:
+                print(f"Failed to clean up audio file {temp_audio_file}: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)
