@@ -1,13 +1,42 @@
-import os, re, uuid, markdown, tempfile, json
-from flask import Flask, request, jsonify
+import os, re, uuid, markdown, tempfile, json, base64
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
-from captions import get_captions
+from .captions import get_captions
+from .limiter import fetch_slot
+
+# Decode cookies at cold start for YouTube bot avoidance
+COOKIES_B64 = os.getenv("YT_COOKIES_B64", "")
+if COOKIES_B64:
+    try:
+        with open("/tmp/youtube_cookies.txt", "wb") as f:
+            f.write(base64.b64decode(COOKIES_B64))
+        print("Cookies decoded successfully")
+    except Exception as e:
+        print("Failed to write cookies:", e)
+
+# Log cookies file status
+p = "/tmp/youtube_cookies.txt"
+if os.path.exists(p):
+    size = os.path.getsize(p)
+    print(f"cookies.txt size: {size} bytes")
+    if size == 0:
+        print("WARNING: cookies.txt is empty!")
+else:
+    print("cookies.txt not found - YouTube requests will be more likely to hit rate limits")
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 app = Flask(__name__)
+
+# Serve static files (images, favicon, etc.)
+@app.route('/<path:filename>')
+def serve_static(filename):
+    """Serve static files from public directory"""
+    if filename.endswith(('.ico', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.css', '.js')):
+        return send_from_directory('../public', filename)
+    return "Not found", 404
 
 def get_gemini(model="gemini-1.5-flash"):
     if not GOOGLE_API_KEY:
@@ -43,6 +72,32 @@ def generate_download_content(base_id: str, transcript_text: str, summary_md: st
         'markdown': summary_md or "",
         'html': full_html
     }
+
+def srt_to_text(srt: str) -> str:
+    """Extract text from SRT subtitle format"""
+    out = []
+    for line in srt.splitlines():
+        line = line.strip()
+        if not line or line.isdigit() or "-->" in line: 
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+def vtt_to_text(vtt: str) -> str:
+    """Extract text from VTT subtitle format"""
+    out = []
+    header_skipped = False
+    for line in vtt.splitlines():
+        line = line.rstrip("\n")
+        if not header_skipped:
+            if line.strip().lower().startswith("webvtt"):  # drop header
+                header_skipped = True
+            continue
+        l = line.strip()
+        if not l or "-->" in l: 
+            continue
+        out.append(l)
+    return "\n".join(out).strip()
 
 @app.route('/')
 def index():
@@ -491,8 +546,9 @@ def process_video():
         if not is_youtube_url(video_url):
             return jsonify({'success': False, 'error': 'Use a YouTube link or switch to Paste mode.'}), 400
 
-        # Use resilient caption fetcher with cache + backoff
-        text, diag = get_captions(video_url)
+        # Use resilient caption fetcher with cache + backoff + concurrency gate
+        with fetch_slot():
+            text, diag = get_captions(video_url)
         if not text:
             # Determine appropriate error response based on diagnostics
             if diag.get("reason") == "rate_limited_or_blocked":
