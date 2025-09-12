@@ -420,7 +420,12 @@ def download_file(filename):
 
 @app.route('/health')
 def health_check():
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+    return jsonify({
+        'status': 'healthy', 
+        'timestamp': datetime.now().isoformat(),
+        'assemblyai_configured': bool(ASSEMBLYAI_API_KEY),
+        'anthropic_configured': bool(ANTHROPIC_API_KEY)
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
