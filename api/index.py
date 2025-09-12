@@ -537,7 +537,7 @@ def process_video():
             text, err = transcribe_via_url(video_url)
             if err:
                 # Only fallback on retrieval-ish errors
-                hints = ("retrieve", "403", "404", "redirect", "forbidden", "not accessible", "timeout", "unsupported")
+                hints = ("retrieve", "403", "404", "redirect", "forbidden", "not accessible", "timeout", "unsupported", "download error", "unable to download")
                 if any(h in err.lower() for h in hints):
                     print(f"[FALLBACK] Direct URL failed with: {err}")
                     print(f"[FALLBACK] Attempting upload fallback for: {video_url}")
