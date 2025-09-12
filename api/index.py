@@ -64,12 +64,11 @@ def fetch_captions_primary(video_url: str,
                            prefer_langs=("en","en-US","en-GB"),
                            fallback_translate_to="en"):
     vid = extract_video_id(video_url)
-    if not vid:
-        return None, {"reason": "no_video_id"}
-
     diag = {"video_id": vid, "step": None, "chosen": None, "langs_found": [], "generated": None, "translated": False}
+    if not vid:
+        return None, {**diag, "reason":"no_video_id"}
 
-    # Quick path
+    # Step 1: direct preferred
     try:
         diag["step"] = "direct_preferred"
         entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(prefer_langs))
@@ -82,77 +81,79 @@ def fetch_captions_primary(video_url: str,
     except Exception as e:
         diag["direct_error"] = str(e)
 
-    # List and choose
+    # Step 2: list & choose
     try:
         diag["step"] = "list_transcripts"
         tlist = YouTubeTranscriptApi.list_transcripts(vid)
-        available = []
         for t in tlist:
-            available.append({"language": t.language_code, "is_generated": t.is_generated, "is_translatable": t.is_translatable})
-        diag["langs_found"] = available
+            diag["langs_found"].append({
+                "language": t.language_code,
+                "is_generated": t.is_generated,
+                "is_translatable": t.is_translatable
+            })
 
         def rank(t):
             try:
                 pref_index = list(prefer_langs).index(t.language_code)
             except ValueError:
                 pref_index = len(prefer_langs) + 1
-            manual_bonus = 0 if not t.is_generated else 1   # manual wins
+            manual_bonus = 0 if not t.is_generated else 1
             return (pref_index, manual_bonus)
 
-        candidates = sorted(list(tlist), key=rank)
+        cands = sorted(list(tlist), key=rank)
 
-        # a) same-language best candidate
-        for cand in candidates:
-            if cand.language_code in prefer_langs:
-                txt = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+        # 2a) same-language
+        for c in cands:
+            if c.language_code in prefer_langs:
+                txt = "\n".join(x.get("text","") for x in c.fetch() if x.get("text")).strip() or None
                 if txt:
-                    diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
-                    diag["generated"] = cand.is_generated
+                    diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
+                    diag["generated"] = c.is_generated
                     return txt, diag
 
-        # b) translate non-preferred if allowed
+        # 2b) translate if allowed
         if fallback_translate_to:
-            for cand in candidates:
-                if getattr(cand, "is_translatable", False):
+            for c in cands:
+                if getattr(c, "is_translatable", False):
                     try:
-                        t = cand.translate(fallback_translate_to).fetch()
+                        t = c.translate(fallback_translate_to).fetch()
                         txt = "\n".join(x.get("text","") for x in t if x.get("text")).strip() or None
                         if txt:
-                            diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
-                            diag["generated"] = cand.is_generated
+                            diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
+                            diag["generated"] = c.is_generated
                             diag["translated"] = True
                             return txt, diag
                     except Exception as te:
                         diag.setdefault("translate_errors", []).append(str(te))
 
-        # c) any manual, then any generated
+        # 2c) any manual → any generated
         any_manual = [t for t in tlist if not t.is_generated]
         any_generated = [t for t in tlist if t.is_generated]
         for bucket in (any_manual, any_generated):
-            for cand in bucket:
+            for c in bucket:
                 try:
-                    txt = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+                    txt = "\n".join(x.get("text","") for x in c.fetch() if x.get("text")).strip() or None
                     if txt:
-                        diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
-                        diag["generated"] = cand.is_generated
+                        diag["chosen"] = {"language": c.language_code, "is_generated": c.is_generated}
+                        diag["generated"] = c.is_generated
                         return txt, diag
                 except Exception as fe:
                     diag.setdefault("fetch_errors", []).append(str(fe))
 
-        return None, {**diag, "reason": "no_working_track"}
+        return None, {**diag, "reason":"no_working_track"}
 
     except TranscriptsDisabled:
-        return None, {**diag, "reason": "captions_disabled"}
+        return None, {**diag, "reason":"captions_disabled"}
     except NoTranscriptFound:
-        return None, {**diag, "reason": "no_transcripts"}
+        return None, {**diag, "reason":"no_transcripts"}
     except TooManyRequests:
-        return None, {**diag, "reason": "rate_limited"}
+        return None, {**diag, "reason":"rate_limited"}
     except VideoUnavailable:
-        return None, {**diag, "reason": "video_unavailable"}
+        return None, {**diag, "reason":"video_unavailable"}
     except CouldNotRetrieveTranscript:
-        return None, {**diag, "reason": "retrieve_failed"}
+        return None, {**diag, "reason":"retrieve_failed"}
     except Exception as e:
-        return None, {**diag, "reason": f"unexpected:{e}"}
+        return None, {**diag, "reason":f"unexpected:{e}"}
 
 # ---------- FALLBACK: yt-dlp subtitle pull (no video download) ----------
 def fetch_captions_fallback_ytdlp(video_url: str, prefer_langs=("en","en-US","en-GB")):
@@ -559,7 +560,7 @@ def health():
     return jsonify({
         'status': 'healthy', 
         'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
-        'version': '4.2.0-robust-captions'
+        'version': '4.2.1-diagnostics'
     })
 
 @app.route('/process', methods=['POST'])
