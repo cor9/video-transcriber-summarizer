@@ -26,7 +26,7 @@ if os.path.exists(p):
 else:
     print("cookies.txt not found - YouTube requests will be more likely to hit rate limits")
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+# API key is now handled by _get_gemini_key() function
 
 app = Flask(__name__)
 
@@ -38,11 +38,18 @@ def serve_static(filename):
         return send_from_directory('../public', filename)
     return "Not found", 404
 
-def get_gemini(model="gemini-1.5-flash"):
-    if not GOOGLE_API_KEY:
-        return None
-    genai.configure(api_key=GOOGLE_API_KEY)
-    return genai.GenerativeModel(model)
+def _get_gemini_key() -> str:
+    """Get Gemini API key from either GEMINI_API_KEY or GOOGLE_API_KEY"""
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not key:
+        raise RuntimeError("Missing GEMINI_API_KEY (or GOOGLE_API_KEY) in server env")
+    return key.strip()
+
+def get_gemini(model_name="gemini-1.5-flash"):
+    """Get configured Gemini model"""
+    key = _get_gemini_key()
+    genai.configure(api_key=key)
+    return genai.GenerativeModel(model_name)
 
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
@@ -52,35 +59,30 @@ def summarize_with_gemini(text: str, summary_format: str = "bullet_points") -> s
     import time
     import random
     
-    key = os.getenv("GOOGLE_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("GOOGLE_API_KEY not set in runtime")
-    genai.configure(api_key=key)
-
     prompts = {
         "bullet_points": "Summarize in crisp bullet points with actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights; use short headings with one-sentence explanations.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights with short headings + one sentence each.\n\nTranscript:\n{t}",
         "detailed_summary": "Write a structured summary: purpose, key points, examples, conclusions, next steps.\n\nTranscript:\n{t}",
     }
     prompt = prompts.get(summary_format, prompts["bullet_points"]).format(t=text[:200_000])
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = get_gemini("gemini-1.5-flash")
     last_err = None
     for attempt in range(1, 4):
         t0 = time.time()
         try:
             resp = model.generate_content(prompt)
             out = (resp.text or "").strip()
-            dt = round(time.time() - t0, 3)
-            print(f"[GEMINI] attempt={attempt} seconds={dt} chars_out={len(out)}")
+            dur = round(time.time() - t0, 2)
+            print(f"[GEMINI] ok attempt={attempt} {dur}s chars={len(out)}")
             if out:
                 return out
             raise RuntimeError("Empty response from Gemini")
         except Exception as e:
             last_err = e
             print(f"[GEMINI] attempt={attempt} failed: {e}")
-            time.sleep(min(2 ** attempt + random.random(), 8))
-    raise RuntimeError(f"Gemini summarization failed after retries: {last_err}")
+            time.sleep(min(2**attempt + random.random(), 8))
+    raise RuntimeError(f"Gemini summarization failed: {last_err}")
 
 def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
     """Generate download content for serverless environment (no file writing)"""
@@ -437,17 +439,17 @@ def index():
                 } else {
                     progress('Fetching captions...');
                     response = await fetch('/process', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
                             mode,
-                            video_url: videoUrl,
+                        video_url: videoUrl,
                             raw_transcript: rawTranscript,
                             summary_format: summaryFormat
-                        })
-                    });
+                    })
+                });
                 }
                 
                 progress('Summarizing with Gemini...');
@@ -503,25 +505,18 @@ def health():
     """Comprehensive health check that tests Gemini API connectivity"""
     import time
     
-    key = os.getenv("GOOGLE_API_KEY", "").strip()
-    ok_key = bool(key)
-    detail = {"gemini_key_found": ok_key}
-
-    if not ok_key:
-        return jsonify(detail | {"status": "no_key_in_runtime"}), 500
-
+    key_src = "GEMINI_API_KEY" if os.getenv("GEMINI_API_KEY") else ("GOOGLE_API_KEY" if os.getenv("GOOGLE_API_KEY") else None)
+    detail = {"key_source": key_src or "none"}
+    
+    if not key_src:
+        return jsonify(detail | {"status": "no_key"}), 500
+    
     try:
-        genai.configure(api_key=key)
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv(key_src))
         t0 = time.time()
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content("respond with the single word: ok")
-        dt = round(time.time() - t0, 3)
-        detail |= {
-            "status": "gemini_ok",
-            "rt_seconds": dt,
-            "sample": (resp.text or "").strip()[:20]
-        }
-        return jsonify(detail), 200
+        txt = genai.GenerativeModel("gemini-1.5-flash").generate_content("say ok").text.strip()
+        return jsonify(detail | {"status": "gemini_ok", "sample": txt, "rt": round(time.time() - t0, 2)}), 200
     except Exception as e:
         return jsonify(detail | {"status": "gemini_error", "error": str(e)}), 500
 
