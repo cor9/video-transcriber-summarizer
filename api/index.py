@@ -1,77 +1,137 @@
-import os, uuid, markdown, re, requests
-from flask import Flask, request, jsonify
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+import os, re, uuid, requests, markdown
+from flask import Flask, request, jsonify, send_file
+from googleapiclient.discovery import build
+import google.generativeai as genai
 
-import anthropic
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+# --- ENV
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
 app = Flask(__name__)
 
-# YouTube ID extraction regex
-YOUTUBE_ID_RE = re.compile(
-    r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
-)
+# --- Gemini init (lazy-safe)
+def get_gemini(model="gemini-1.5-flash"):
+    if not GOOGLE_API_KEY:
+        return None
+    genai.configure(api_key=GOOGLE_API_KEY)
+    return genai.GenerativeModel(model)
+
+def ensure_dirs():
+    os.makedirs("transcripts", exist_ok=True)
+    os.makedirs("summaries", exist_ok=True)
+
+# --- YouTube utils
+_YT_ID_RE = re.compile(r'(?:v=|/)([0-9A-Za-z_-]{11})')
 
 def extract_video_id(url: str) -> str | None:
-    """Extract YouTube video ID from various URL formats"""
-    # Handles standard and youtu.be forms
-    m = YOUTUBE_ID_RE.search(url)
+    m = _YT_ID_RE.search(url)
     if m:
         return m.group(1)
-    # youtu.be short form
     if "youtu.be/" in url:
         return url.rstrip('/').split('/')[-1][:11]
     return None
 
-
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
 
-def fetch_youtube_captions_text(video_url: str, languages=("en","en-US","en-GB")) -> str | None:
-    vid = extract_video_id(video_url)
+def fetch_youtube_captions_text(youtube_url: str, lang_priority=("en","en-US","en-GB")) -> str | None:
+    """Official YouTube Data API: pick best caption track, download SRT, strip to plain text."""
+    if not YOUTUBE_API_KEY:
+        return None
+    vid = extract_video_id(youtube_url)
     if not vid:
         return None
-    try:
-        items = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        text = "\n".join([i.get("text","") for i in items]).strip()
-        return text or None
-    except (TranscriptsDisabled, NoTranscriptFound):
-        return None
-    except Exception:
-        # age-restricted, members-only, region-blocked, or oddball cases
+
+    service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+    tracks = service.captions().list(part="id,snippet", videoId=vid).execute()
+    items = tracks.get("items", [])
+    if not items:
         return None
 
-def summarize_with_anthropic(text: str, summary_format: str = "bullet_points") -> str:
-    if not anthropic_client:
-        # No API key: return a simple trimmed excerpt as a "summary"
-        return "\n".join(text.splitlines()[:50])
+    # choose a track by language priority
+    def score(it):
+        lang = (it["snippet"].get("language") or "").lower()
+        try: return lang_priority.index(lang)
+        except ValueError: return len(lang_priority)+1
+    items.sort(key=score)
+    caption_id = items[0]["id"]
 
-    templates = {
-        "bullet_points": "Summarize in crisp bullet points with key ideas and actionable takeaways.\n\nTranscript:\n{t}",
-        "key_insights": "Extract the most important insights with short headings and brief explanations.\n\nTranscript:\n{t}",
-        "detailed_summary": "Detailed, organized summary: topic/purpose, key points, notable examples, conclusions/next steps.\n\nTranscript:\n{t}",
+    # download SRT
+    dl = f"https://www.googleapis.com/youtube/v3/captions/{caption_id}?tfmt=srt&key={YOUTUBE_API_KEY}"
+    r = requests.get(dl, timeout=30)
+    if r.status_code != 200 or not r.text.strip():
+        return None
+
+    # strip SRT → text
+    lines = []
+    for line in r.text.splitlines():
+        line = line.strip()
+        if not line:       continue
+        if line.isdigit(): continue
+        if "-->" in line:  continue
+        lines.append(line)
+    return "\n".join(lines).strip() or None
+
+# --- Summarization (Gemini with graceful fallback)
+def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
+    model = get_gemini("gemini-1.5-flash")
+    if not model:
+        return local_summary(text, summary_format)
+
+    prompts = {
+        "bullet_points": """Summarize the transcript in crisp bullet points. Focus on key ideas and actionable takeaways.
+
+Transcript:
+{t}""",
+        "key_insights": """Extract the most important insights, lessons, and actionable takeaways using short sections with clear headings.
+
+Transcript:
+{t}""",
+        "detailed_summary": """Write a clear, well-structured detailed summary covering:
+1) Topic & purpose
+2) Key points
+3) Notable examples/details
+4) Conclusions or next steps
+
+Transcript:
+{t}""",
     }
-    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text[:200000])
-    resp = anthropic_client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=2500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return resp.content[0].text.strip()
+    prompt = prompts.get(summary_format, prompts["bullet_points"]).format(t=text[:200_000])
+    resp = model.generate_content(prompt)
+    return (resp.text or "").strip()
 
-def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
-    """Generate download content for serverless environment (no file writing)"""
+# dumb but serviceable local fallback
+from collections import Counter
+def local_summary(text: str, summary_format: str="bullet_points") -> str:
+    import re
+    sents = re.split(r'(?<=[.!?])\s+', text)
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]+", text.lower())
+    stop = set("""a an the and or but if to of in on for with as by at from is are was were be been being you your i we they he she it this that those these not can will just""".split())
+    freq = Counter(w for w in words if w not in stop and len(w) > 2)
+    def score(sent):
+        sw = re.findall(r"[A-Za-z][A-Za-z'\-]+", sent.lower())
+        return sum(freq.get(w, 0) for w in sw) / (len(sw) + 1)
+    top = [s.strip() for s in sorted(sents, key=score, reverse=True)[:10] if s.strip()]
+    if summary_format == "detailed_summary":
+        return "\n\n".join(top)
+    return "\n".join(f"- {t}" for t in top[:8])
+
+def write_outputs(base_id: str, transcript_text: str, summary_md: str):
+    ensure_dirs()
+    tx_path  = os.path.join("transcripts", f"{base_id}.txt")
+    md_path  = os.path.join("summaries",  f"{base_id}.md")
+    html_path= os.path.join("summaries",  f"{base_id}.html")
+
+    with open(tx_path, "w", encoding="utf-8") as f:  f.write(transcript_text or "")
+    with open(md_path, "w", encoding="utf-8") as f:  f.write(summary_md or "")
+
     html_body = markdown.markdown(summary_md or "")
     full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
 <style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
 </head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
-    
-    return {
-        'transcript': transcript_text or "",
-        'markdown': summary_md or "",
-        'html': full_html
-    }
+    with open(html_path, "w", encoding="utf-8") as f: f.write(full_html)
+
+    return tx_path, md_path, html_path
 
 @app.route('/')
 def index():
@@ -257,7 +317,7 @@ def index():
                     <label for="videoUrl">YouTube URL</label>
                     <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." >
                     <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
-                        Supported: YouTube links **with captions**. For non-YouTube, switch to "Paste Transcript."
+                        Supported: YouTube links with captions (fast & free). Or switch to Paste Transcript for anything else.
                     </small>
                 </div>
 
@@ -379,10 +439,44 @@ def index():
 def health():
     return jsonify({
         'status': 'healthy', 
-        'anthropic_configured': bool(os.getenv("ANTHROPIC_API_KEY")),
-        'version': '3.1.0-paste-mode'
+        'google_api_configured': bool(os.getenv("GOOGLE_API_KEY")),
+        'youtube_api_configured': bool(os.getenv("YOUTUBE_API_KEY")),
+        'version': '4.0.0-google-ecosystem'
     })
 
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Download generated HTML, MD, or TXT files"""
+    try:
+        # Check in both transcripts and summaries directories
+        possible_paths = [
+            os.path.join("transcripts", filename),
+            os.path.join("summaries", filename)
+        ]
+        
+        file_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                file_path = path
+                break
+        
+        if not file_path:
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Determine MIME type based on file extension
+        if filename.endswith('.html'):
+            mimetype = 'text/html'
+        elif filename.endswith('.md'):
+            mimetype = 'text/markdown'
+        elif filename.endswith('.txt'):
+            mimetype = 'text/plain'
+        else:
+            mimetype = 'application/octet-stream'
+        
+        return send_file(file_path, as_attachment=True, download_name=filename, mimetype=mimetype)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/process', methods=['POST'])
 def process_video():
@@ -393,109 +487,63 @@ def process_video():
         raw_transcript = (data.get('raw_transcript') or '').strip()
         summary_format = data.get('summary_format', 'bullet_points')
 
-        # 1) PASTE MODE (or any request with non-empty raw_transcript) → no external calls
+        # 1) Paste mode (no external calls)
         if mode == 'paste' or raw_transcript:
-            if not raw_transcript or len(raw_transcript) < 20:
-                return jsonify({
-                    'success': False,
-                    'error': 'Please paste a transcript (at least 20 characters).'
-                }), 400
-
-            # Optional guardrail: max size
-            if len(raw_transcript) > 200000:
-                return jsonify({
-                    'success': False,
-                    'error': 'Transcript too long (max 200,000 characters). Please shorten it.'
-                }), 400
-
-            base_id = str(uuid.uuid4())[:8]  # or let them name it later
-            # summarize (uses Anthropic if key present; otherwise returns excerpt)
-            summary_md = summarize_with_anthropic(raw_transcript, summary_format)
-            download_content = generate_download_content(base_id, raw_transcript, summary_md)
-
-            # Generate download links with data URLs for serverless environment
-            transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(raw_transcript)}"
-            markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
-            html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
-            
-            links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
-            links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
-            links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
-
-            preview_html = f"""
+            if len(raw_transcript) < 20:
+                return jsonify({'success': False, 'error': 'Please paste a transcript (≥ 20 chars).'}), 400
+            base_id = str(uuid.uuid4())[:8]
+            summary_md = summarize_with_gemini(raw_transcript, summary_format)
+            tx_path, md_path, html_path = write_outputs(base_id, raw_transcript, summary_md)
+            links = ""
+            if os.path.exists(html_path): links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
+            if os.path.exists(md_path):   links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
+            if os.path.exists(tx_path):   links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+            body = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
-                <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{raw_transcript}</div>
-                <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
-                <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+              <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript (pasted)</h3>
+              <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{raw_transcript}</div>
+              <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
+              <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
             </div>
             """
-            return jsonify({
-                'success': True,
-                'transcript': preview_html,
-                'download_links': links,
-                'message': 'Processed pasted transcript.'
-            })
+            return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed pasted transcript.'})
 
-        # 2) YOUTUBE MODE - existing YouTube captions logic
-        if not video_url or not video_url.startswith(('http://', 'https://')):
+        # 2) YouTube + captions path
+        if not video_url or not video_url.startswith(('http://','https://')):
             return jsonify({'success': False, 'error': 'Provide a valid http(s) URL'}), 400
-
         if not is_youtube_url(video_url):
             return jsonify({
                 'success': False,
-                'error': 'This instance only supports YouTube links.',
-                'suggestions': [
-                    'Paste a YouTube URL with captions enabled',
-                    'Or switch to "Paste Transcript" mode for any text'
-                ]
+                'error': 'This instance supports YouTube links (captions) or Paste mode.',
+                'suggestions': ['Switch to Paste mode and drop your transcript text.']
             }), 400
 
         base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-
-        # Fetch captions
-        transcript_text = fetch_youtube_captions_text(video_url)
-        if not transcript_text:
+        text = fetch_youtube_captions_text(video_url)
+        if not text:
             return jsonify({
                 'success': False,
-                'error': 'No captions available for this YouTube video.',
-                'why': 'Captions may be disabled, auto-captions unavailable, age-restricted, private, or members-only.',
-                'fixes': [
-                    'Try a different video with captions',
-                    'Enable captions on the video (if it\'s yours)',
-                    'Or switch to "Paste Transcript" mode'
-                ]
+                'error': 'No captions found for this video.',
+                'why': 'Captions disabled, private/members-only, age-restricted, or not generated yet.',
+                'fixes': ['Try a different video with captions', 'Use Paste mode with your own transcript']
             }), 404
 
-        # Summarize (or just echo if no Anthropic key)
-        summary_md = summarize_with_anthropic(transcript_text, summary_format)
-        download_content = generate_download_content(base_id, transcript_text, summary_md)
+        summary_md = summarize_with_gemini(text, summary_format)
+        tx_path, md_path, html_path = write_outputs(base_id, text, summary_md)
+        links = ""
+        if os.path.exists(html_path): links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
+        if os.path.exists(md_path):   links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
+        if os.path.exists(tx_path):   links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
 
-        # Generate download links with data URLs for serverless environment
-        transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(transcript_text)}"
-        markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
-        html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
-        
-        links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
-        links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
-        links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
-
-        # Inline preview
-        preview_html = f"""
+        body = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
-            <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{(transcript_text or '')}</div>
-            <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
-            <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
+          <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
+          <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:420px;overflow:auto;">{text}</div>
+          <h3 style="color:#2c3e50;margin:20px 0 12px;">Summary ({summary_format.replace('_',' ').title()})</h3>
+          <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md or '')}</div>
         </div>
         """
-
-        return jsonify({
-            'success': True,
-            'transcript': preview_html,
-            'download_links': links,
-            'message': 'Processed via YouTube captions.'
-        })
+        return jsonify({'success': True, 'transcript': body, 'download_links': links, 'message': 'Processed via YouTube captions.'})
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
