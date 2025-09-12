@@ -2,7 +2,14 @@ import os, re, uuid, markdown
 from flask import Flask, request, jsonify
 import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    CouldNotRetrieveTranscript,
+    VideoUnavailable,
+    TooManyRequests
+)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
@@ -52,20 +59,113 @@ def extract_video_id(url: str) -> str | None:
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
-# ---- captions via youtube-transcript-api (public/auto captions)
-def fetch_youtube_captions_text(video_url: str, languages=("en","en-US","en-GB")) -> str | None:
+def fetch_youtube_captions_text(video_url: str,
+                                prefer_langs=("en","en-US","en-GB"),
+                                fallback_translate_to="en"):
+    """
+    Robust captions fetch:
+    1) Try preferred languages directly.
+    2) List all transcripts; choose best match (manual > generated).
+    3) If not in preferred languages, try translating to English.
+    Returns: (text or None, diagnostics dict)
+    """
     vid = extract_video_id(video_url)
     if not vid:
-        return None
+        return None, {"reason": "no_video_id"}
+
+    diag = {"video_id": vid, "step": None, "chosen": None, "langs_found": [], "generated": None, "translated": False}
+
+    # STEP 1: quick path for preferred langs
     try:
-        entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
-        # join lines; strip timing/indices (not present here)
-        return "\n".join(e.get("text","") for e in entries if e.get("text")).strip() or None
-    except (TranscriptsDisabled, NoTranscriptFound):
-        return None
-    except Exception:
-        # age-restricted, members-only, region-locked, or live with no captions yet
-        return None
+        diag["step"] = "direct_preferred"
+        entries = YouTubeTranscriptApi.get_transcript(vid, languages=list(prefer_langs))
+        text = "\n".join(e.get("text","") for e in entries if e.get("text")).strip() or None
+        if text:
+            diag["chosen"] = "preferred_direct"
+            diag["generated"] = None  # unknown in this path
+            return text, diag
+    except (NoTranscriptFound, TranscriptsDisabled):
+        pass  # fall through
+    except Exception as e:
+        # keep going; we'll try list-based
+        diag["direct_error"] = str(e)
+
+    # STEP 2: enumerate all transcripts and choose best
+    try:
+        diag["step"] = "list_transcripts"
+        tlist = YouTubeTranscriptApi.list_transcripts(vid)
+
+        # Gather info
+        available = []
+        for t in tlist:
+            info = {
+                "language": t.language_code,
+                "is_generated": t.is_generated,
+                "is_translatable": t.is_translatable
+            }
+            available.append(info)
+        diag["langs_found"] = available
+
+        # Prefer: a) manual in preferred langs, b) generated in preferred langs
+        def rank(t):
+            # Lower is better
+            pref_index = (list(prefer_langs)+["~"]).index(t.language_code) if t.language_code in prefer_langs else len(prefer_langs)+1
+            manual_bonus = 0 if not t.is_generated else 1  # manual (0) beats generated (1)
+            return (pref_index, manual_bonus)
+
+        # Try to find a direct non-translated candidate first
+        candidates = sorted(list(tlist), key=rank)
+        for cand in candidates:
+            if cand.language_code in prefer_langs:
+                diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
+                diag["generated"] = cand.is_generated
+                text = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+                if text:
+                    return text, diag
+
+        # STEP 3: translate a non-preferred language if possible
+        if fallback_translate_to:
+            for cand in candidates:
+                if getattr(cand, "is_translatable", False):
+                    try:
+                        t = cand.translate(fallback_translate_to).fetch()
+                        text = "\n".join(x.get("text","") for x in t if x.get("text")).strip() or None
+                        if text:
+                            diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
+                            diag["generated"] = cand.is_generated
+                            diag["translated"] = True
+                            return text, diag
+                    except Exception as te:
+                        diag.setdefault("translate_errors", []).append(str(te))
+
+        # If still nothing, try "any manual then any generated" in any language
+        any_manual = [t for t in tlist if not t.is_generated]
+        any_generated = [t for t in tlist if t.is_generated]
+        for bucket in (any_manual, any_generated):
+            for cand in bucket:
+                try:
+                    text = "\n".join(x.get("text","") for x in cand.fetch() if x.get("text")).strip() or None
+                    if text:
+                        diag["chosen"] = {"language": cand.language_code, "is_generated": cand.is_generated}
+                        diag["generated"] = cand.is_generated
+                        return text, diag
+                except Exception as fe:
+                    diag.setdefault("fetch_errors", []).append(str(fe))
+
+        return None, {**diag, "reason": "no_working_track"}
+
+    except TranscriptsDisabled:
+        return None, {**diag, "reason": "captions_disabled"}
+    except NoTranscriptFound:
+        return None, {**diag, "reason": "no_transcripts"}
+    except TooManyRequests:
+        return None, {**diag, "reason": "rate_limited"}
+    except VideoUnavailable:
+        return None, {**diag, "reason": "video_unavailable"}
+    except CouldNotRetrieveTranscript:
+        return None, {**diag, "reason": "retrieve_failed"}
+    except Exception as e:
+        return None, {**diag, "reason": f"unexpected:{e}"}
 
 def summarize_with_gemini(text: str, summary_format: str="bullet_points") -> str:
     model = get_gemini("gemini-1.5-flash")
@@ -446,13 +546,18 @@ def process_video():
             return jsonify({'success': False, 'error': 'Use a YouTube link or switch to Paste mode.'}), 400
 
         base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
-        text = fetch_youtube_captions_text(video_url)
+        text, diag = fetch_youtube_captions_text(video_url)
         if not text:
             return jsonify({
                 'success': False,
-                'error': 'No captions found or not accessible for this video.',
-                'why': 'Captions may be disabled, private/members-only, age-restricted, region-locked, or not generated yet.',
-                'fixes': ['Try a different video with captions', 'Use Paste mode with your own transcript']
+                'error': 'Captions not available or not accessible.',
+                'diagnostics': diag,
+                'fixes': [
+                    'Check if the video actually has captions (CC).',
+                    'If they are non-English, we attempt auto-translation; if blocked, paste your own transcript.',
+                    'Avoid age-restricted/private/members-only videos.',
+                    'Try again later for recent uploads (captions sometimes lag).'
+                ]
             }), 404
 
         summary_md = summarize_with_gemini(text, summary_format)
