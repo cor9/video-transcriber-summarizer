@@ -238,6 +238,9 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
+        let currentJobId = null;
+        let pollInterval = null;
+
         document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -246,13 +249,15 @@ HTML_TEMPLATE = '''
             
             // Show progress, hide other elements
             document.getElementById('submitBtn').disabled = true;
-            document.getElementById('submitBtn').textContent = '🔄 Processing...';
+            document.getElementById('submitBtn').textContent = '🔄 Submitting...';
             document.getElementById('results').style.display = 'none';
             document.getElementById('error').style.display = 'none';
             document.getElementById('progress').style.display = 'block';
+            document.getElementById('progressText').textContent = 'Submitting job...';
             
             try {
-                const response = await fetch('/process', {
+                // Submit job
+                const response = await fetch('/api/submit', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -266,22 +271,102 @@ HTML_TEMPLATE = '''
                 const data = await response.json();
                 
                 if (data.success) {
-                    // Show results
-                    document.getElementById('transcriptContent').innerHTML = data.transcript;
-                    document.getElementById('downloadLinks').innerHTML = data.download_links;
-                    document.getElementById('results').style.display = 'block';
+                    currentJobId = data.job_id;
+                    document.getElementById('submitBtn').textContent = '🔄 Processing...';
+                    document.getElementById('progressText').textContent = 'Job submitted! Processing...';
+                    
+                    // Start polling for status
+                    startPolling();
                 } else {
-                    throw new Error(data.error || 'Processing failed');
+                    throw new Error(data.error || 'Failed to submit job');
                 }
             } catch (error) {
                 document.getElementById('error').innerHTML = 'Error: ' + error.message;
                 document.getElementById('error').style.display = 'block';
-            } finally {
-                document.getElementById('submitBtn').disabled = false;
-                document.getElementById('submitBtn').textContent = '🚀 Process Video';
-                document.getElementById('progress').style.display = 'none';
+                resetForm();
             }
         });
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/status?job_id=${currentJobId}`);
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        updateProgress(data);
+                        
+                        if (data.status === 'completed') {
+                            showResults(data);
+                            clearInterval(pollInterval);
+                            resetForm();
+                        } else if (data.status === 'failed') {
+                            throw new Error(data.error || 'Job failed');
+                        }
+                    } else {
+                        throw new Error(data.error || 'Failed to check status');
+                    }
+                } catch (error) {
+                    document.getElementById('error').innerHTML = 'Error: ' + error.message;
+                    document.getElementById('error').style.display = 'block';
+                    clearInterval(pollInterval);
+                    resetForm();
+                }
+            }, 2000); // Poll every 2 seconds
+        }
+
+        function updateProgress(jobData) {
+            const statusMessages = {
+                'queued': 'Job queued, waiting to start...',
+                'processing': 'Processing video...',
+                'completed': 'Processing complete!'
+            };
+            
+            document.getElementById('progressText').textContent = 
+                statusMessages[jobData.status] || `Status: ${jobData.status}`;
+        }
+
+        function showResults(jobData) {
+            const downloadLinks = jobData.download_links || {};
+            let linksHtml = '';
+            
+            if (downloadLinks.transcript) {
+                linksHtml += `<a href="${downloadLinks.transcript}" target="_blank" class="download-link">📄 Download Transcript</a>`;
+            }
+            if (downloadLinks.summary) {
+                linksHtml += `<a href="${downloadLinks.summary}" target="_blank" class="download-link">📝 Download Summary</a>`;
+            }
+            if (downloadLinks.html) {
+                linksHtml += `<a href="${downloadLinks.html}" target="_blank" class="download-link">🌐 View HTML</a>`;
+            }
+            
+            document.getElementById('downloadLinks').innerHTML = linksHtml;
+            document.getElementById('transcriptContent').innerHTML = `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h3 style="color: #2c3e50; margin-bottom: 20px;">✅ Processing Complete!</h3>
+                    <p>Your video has been processed successfully. Download the files using the links below.</p>
+                    <div style="margin-top: 20px; padding: 15px; background: #e8f4fd; border-radius: 8px; border-left: 4px solid #3498db;">
+                        <strong>Job ID:</strong> ${jobData.job_id}<br>
+                        <strong>Video URL:</strong> ${jobData.video_url}<br>
+                        <strong>Format:</strong> ${jobData.summary_format.replace('_', ' ')}
+                    </div>
+                </div>
+            `;
+            document.getElementById('results').style.display = 'block';
+        }
+
+        function resetForm() {
+            document.getElementById('submitBtn').disabled = false;
+            document.getElementById('submitBtn').textContent = '🚀 Process Video';
+            document.getElementById('progress').style.display = 'none';
+            currentJobId = null;
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
     </script>
 </body>
 </html>
