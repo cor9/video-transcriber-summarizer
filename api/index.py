@@ -38,51 +38,17 @@ def ensure_dirs():
     os.makedirs("summaries", exist_ok=True)
 
 def is_youtube_url(url: str) -> bool:
-    y = ("youtube.com" in url) or ("youtu.be" in url)
-    return y
+    return ("youtube.com" in url) or ("youtu.be" in url)
 
-def fetch_youtube_transcript_text(video_url: str, languages=("en", "en-US", "en-GB")) -> str | None:
+def fetch_youtube_captions_text(video_url: str, languages=("en", "en-US", "en-GB")) -> str | None:
     vid = extract_video_id(video_url)
     if not vid:
         return None
     try:
-        # Use the correct API for version 1.2.2
-        api = YouTubeTranscriptApi()
-        transcript_list = api.list(vid)
-        
-        # Try to get transcript in preferred language order
-        for lang in languages:
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                transcript_data = transcript.fetch()
-                # Convert to plain text
-                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-                return text.strip() if text.strip() else None
-            except:
-                continue
-        
-        # If no preferred language found, try generated transcripts
-        try:
-            transcript = transcript_list.find_generated_transcript(['en'])
-            transcript_data = transcript.fetch()
-            text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-            return text.strip() if text.strip() else None
-        except:
-            pass
-        
-        # If still no transcript, try any available transcript
-        try:
-            available_transcripts = list(transcript_list)
-            if available_transcripts:
-                transcript = available_transcripts[0]
-                transcript_data = transcript.fetch()
-                text = ' '.join([snippet.text for snippet in transcript_data.snippets])
-                return text.strip() if text.strip() else None
-        except:
-            pass
-            
+        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=list(languages))
+        return "\n".join([item.get("text","") for item in transcript_list]).strip() or None
+    except (TranscriptsDisabled, NoTranscriptFound):
         return None
-        
     except Exception:
         return None
 
@@ -96,76 +62,44 @@ def transcribe_direct_media_url(media_url: str) -> str:
         raise RuntimeError(f"Transcription failed: {tx.error}")
     return tx.text or ""
 
-def summarize_text(text: str, summary_format: str = "bullet_points") -> str:
+def summarize_text_with_anthropic(text: str, summary_format: str = "bullet_points") -> str:
     if not anthropic_client:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
     templates = {
-        "bullet_points": """Please summarize the following transcript in crisp bullet points focused on main ideas and actionable takeaways.
-
-Transcript:
-{transcript}
-""",
-        "key_insights": """Extract the most important insights, lessons, and practical takeaways from the transcript. Use short sections with clear headings.
-
-Transcript:
-{transcript}
-""",
-        "detailed_summary": """Write a detailed, organized summary of the transcript, including:
-1) Topic & purpose
-2) Key points
-3) Notable examples/details
-4) Conclusions or next steps
-
-Transcript:
-{transcript}
-"""
+        "bullet_points": "Summarize the following transcript in crisp bullet points focusing on key ideas and actionable takeaways.\n\nTranscript:\n{t}",
+        "key_insights": "Extract the most important insights, lessons, and practical takeaways. Use short sections with clear headings.\n\nTranscript:\n{t}",
+        "detailed_summary": "Write a detailed, organized summary including: topic/purpose, key points, notable examples, and conclusions/next steps.\n\nTranscript:\n{t}",
     }
-    prompt = templates.get(summary_format, templates["bullet_points"]).format(transcript=text)
+    prompt = templates.get(summary_format, templates["bullet_points"]).format(t=text)
 
     resp = anthropic_client.messages.create(
         model="claude-3-sonnet-20240229",
-        max_tokens=3000,
+        max_tokens=2500,
         messages=[{"role": "user", "content": prompt}],
     )
     return resp.content[0].text.strip()
 
 def write_outputs(base_id: str, transcript_text: str, summary_md: str):
     ensure_dirs()
-    transcript_path = os.path.join("transcripts", f"{base_id}.txt")
-    summary_md_path = os.path.join("summaries", f"{base_id}.md")
-    summary_html_path = os.path.join("summaries", f"{base_id}.html")
+    tx_path = os.path.join("transcripts", f"{base_id}.txt")
+    md_path = os.path.join("summaries", f"{base_id}.md")
+    html_path = os.path.join("summaries", f"{base_id}.html")
 
-    # Write transcript
-    with open(transcript_path, "w", encoding="utf-8") as f:
+    with open(tx_path, "w", encoding="utf-8") as f:
         f.write(transcript_text or "")
 
-    # Write MD
-    with open(summary_md_path, "w", encoding="utf-8") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(summary_md or "")
 
-    # Convert MD to HTML
     html_body = markdown.markdown(summary_md or "")
-    full_html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>{base_id} Summary</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 40px auto; padding: 0 16px; }}
-    h1, h2, h3 {{ color: #2c3e50; }}
-    .summary {{ background: #f8f9fa; padding: 16px; border-radius: 8px; }}
-  </style>
-</head>
-<body>
-  <h1>Summary</h1>
-  <div class="summary">{html_body}</div>
-</body>
-</html>"""
-    with open(summary_html_path, "w", encoding="utf-8") as f:
+    full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
+<style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
+</head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
+    with open(html_path, "w", encoding="utf-8") as f:
         f.write(full_html)
 
-    return transcript_path, summary_md_path, summary_html_path
+    return tx_path, md_path, html_path
 
 @app.route('/')
 def index():
@@ -532,51 +466,73 @@ def process_video():
         if not video_url or not video_url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Provide a valid http(s) Video/Audio URL'}), 400
 
+        # Try YouTube captions path first (no downloads, no Tactiq)
+        if is_youtube_url(video_url):
+            video_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
+            captions = fetch_youtube_captions_text(video_url)
+            if captions:
+                # Summarize
+                summary_md = summarize_text_with_anthropic(captions, summary_format)
+
+                # Persist files so your existing /download links work
+                tx_path, md_path, html_path = write_outputs(video_id, captions, summary_md)
+
+                # Build download links (reuse your /download endpoint)
+                links = ""
+                if os.path.exists(html_path):
+                    links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a>'
+                if os.path.exists(md_path):
+                    links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a>'
+                if os.path.exists(tx_path):
+                    links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+
+                # Inline preview
+                formatted = f"""
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h3 style="color:#2c3e50;margin-bottom:12px;">Transcript</h3>
+                    <div style="background:#f8f9fa;padding:12px;border-radius:8px;white-space:pre-wrap;">{captions}</div>
+                    <h3 style="color:#2c3e50;margin:20px 0 12px;">AI Summary ({summary_format.replace('_',' ').title()})</h3>
+                    <div style="background:#e8f4fd;padding:12px;border-radius:8px;border-left:4px solid #3498db;">{markdown.markdown(summary_md)}</div>
+                </div>
+                """
+
+                return jsonify({
+                    "success": True,
+                    "transcript": formatted,
+                    "download_links": links,
+                    "message": "Processed via YouTube captions."
+                })
+            # If no captions, we fall through to your existing path below.
+
         # Choose an ID for file outputs
         base_id = extract_video_id(video_url) or str(uuid.uuid4())[:8]
 
-        # 1) Get transcript
-        transcript_text = None
-        if is_youtube_url(video_url):
-            # Try YouTube transcript (fast, no downloads)
-            transcript_text = fetch_youtube_transcript_text(video_url)
-            if not transcript_text:
-                return jsonify({
-                    'error': 'No captions/transcript available for this YouTube video.',
-                    'suggestions': [
-                        'Use a direct media URL (MP4/MP3/WAV/etc.)',
-                        'Or upload the audio/video to your cloud storage and paste the direct link'
-                    ]
-                }), 400
-        else:
-            # Direct media URL → AssemblyAI
-            if not ASSEMBLYAI_API_KEY:
-                return jsonify({
-                    'error': 'Direct media transcription requires ASSEMBLYAI_API_KEY.',
-                    'suggestions': [
-                        'Set ASSEMBLYAI_API_KEY or use a YouTube link that has captions.'
-                    ]
-                }), 500
-            transcript_text = transcribe_direct_media_url(video_url)
+        # Direct media URL → AssemblyAI
+        if not ASSEMBLYAI_API_KEY:
+            return jsonify({
+                'error': 'Direct media transcription requires ASSEMBLYAI_API_KEY.',
+                'suggestions': [
+                    'Set ASSEMBLYAI_API_KEY or use a YouTube link that has captions.'
+                ]
+            }), 500
+        transcript_text = transcribe_direct_media_url(video_url)
 
-        # 2) Summarize
-        summary_md = summarize_text(transcript_text, summary_format=summary_format)
+        # Summarize
+        summary_md = summarize_text_with_anthropic(transcript_text, summary_format=summary_format)
 
-        # 3) Persist outputs for download links
-        transcript_path, summary_md_path, summary_html_path = write_outputs(
-            base_id, transcript_text, summary_md
-        )
+        # Persist outputs for download links
+        tx_path, md_path, html_path = write_outputs(base_id, transcript_text, summary_md)
 
-        # 4) Build download links (reuse your existing /download endpoint)
-        download_links = ""
-        if os.path.exists(summary_html_path):
-            download_links += f'<a href="/download/{os.path.basename(summary_html_path)}" target="_blank">📄 Download HTML</a>'
-        if os.path.exists(summary_md_path):
-            download_links += f'<a href="/download/{os.path.basename(summary_md_path)}" target="_blank">📝 Download Markdown</a>'
-        if os.path.exists(transcript_path):
-            download_links += f'<a href="/download/{os.path.basename(transcript_path)}" target="_blank">📄 Download Transcript</a>'
+        # Build download links (reuse your existing /download endpoint)
+        links = ""
+        if os.path.exists(html_path):
+            links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a>'
+        if os.path.exists(md_path):
+            links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a>'
+        if os.path.exists(tx_path):
+            links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
 
-        # 5) Inline display
+        # Inline display
         formatted_content = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Transcript</h3>
@@ -590,7 +546,7 @@ def process_video():
         return jsonify({
             'success': True,
             'transcript': formatted_content,
-            'download_links': download_links,
+            'download_links': links,
             'message': 'Processed successfully.'
         })
 
