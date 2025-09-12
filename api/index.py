@@ -1,5 +1,5 @@
-import os, uuid, markdown, re
-from flask import Flask, request, jsonify, send_file
+import os, uuid, markdown, re, requests
+from flask import Flask, request, jsonify
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 import anthropic
@@ -24,9 +24,6 @@ def extract_video_id(url: str) -> str | None:
         return url.rstrip('/').split('/')[-1][:11]
     return None
 
-def ensure_dirs():
-    os.makedirs("transcripts", exist_ok=True)
-    os.makedirs("summaries", exist_ok=True)
 
 def is_youtube_url(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
@@ -63,26 +60,18 @@ def summarize_with_anthropic(text: str, summary_format: str = "bullet_points") -
     )
     return resp.content[0].text.strip()
 
-def write_outputs(base_id: str, transcript_text: str, summary_md: str):
-    ensure_dirs()
-    tx_path  = os.path.join("transcripts", f"{base_id}.txt")
-    md_path  = os.path.join("summaries",  f"{base_id}.md")
-    html_path= os.path.join("summaries",  f"{base_id}.html")
-
-    with open(tx_path, "w", encoding="utf-8") as f:
-        f.write(transcript_text or "")
-
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(summary_md or "")
-
+def generate_download_content(base_id: str, transcript_text: str, summary_md: str):
+    """Generate download content for serverless environment (no file writing)"""
     html_body = markdown.markdown(summary_md or "")
     full_html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{base_id} Summary</title>
 <style>body{{font-family:Arial,sans-serif;line-height:1.6;max-width:900px;margin:40px auto;color:#333}}</style>
 </head><body><h1>Summary</h1><div>{html_body}</div></body></html>"""
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(full_html)
-
-    return tx_path, md_path, html_path
+    
+    return {
+        'transcript': transcript_text or "",
+        'markdown': summary_md or "",
+        'html': full_html
+    }
 
 @app.route('/')
 def index():
@@ -394,39 +383,6 @@ def health():
         'version': '3.1.0-paste-mode'
     })
 
-@app.route('/download/<filename>')
-def download_file(filename):
-    """Download generated HTML, MD, or TXT files"""
-    try:
-        # Check in both transcripts and summaries directories
-        possible_paths = [
-            os.path.join("transcripts", filename),
-            os.path.join("summaries", filename)
-        ]
-        
-        file_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                file_path = path
-                break
-        
-        if not file_path:
-            return jsonify({'error': 'File not found'}), 404
-        
-        # Determine MIME type based on file extension
-        if filename.endswith('.html'):
-            mimetype = 'text/html'
-        elif filename.endswith('.md'):
-            mimetype = 'text/markdown'
-        elif filename.endswith('.txt'):
-            mimetype = 'text/plain'
-        else:
-            mimetype = 'application/octet-stream'
-        
-        return send_file(file_path, as_attachment=True, download_name=filename, mimetype=mimetype)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/process', methods=['POST'])
 def process_video():
@@ -455,15 +411,16 @@ def process_video():
             base_id = str(uuid.uuid4())[:8]  # or let them name it later
             # summarize (uses Anthropic if key present; otherwise returns excerpt)
             summary_md = summarize_with_anthropic(raw_transcript, summary_format)
-            tx_path, md_path, html_path = write_outputs(base_id, raw_transcript, summary_md)
+            download_content = generate_download_content(base_id, raw_transcript, summary_md)
 
-            links = ""
-            if os.path.exists(html_path):
-                links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
-            if os.path.exists(md_path):
-                links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
-            if os.path.exists(tx_path):
-                links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+            # Generate download links with data URLs for serverless environment
+            transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(raw_transcript)}"
+            markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
+            html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+            
+            links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
+            links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
+            links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
             preview_html = f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -512,17 +469,16 @@ def process_video():
 
         # Summarize (or just echo if no Anthropic key)
         summary_md = summarize_with_anthropic(transcript_text, summary_format)
+        download_content = generate_download_content(base_id, transcript_text, summary_md)
 
-        # Persist for your download buttons
-        tx_path, md_path, html_path = write_outputs(base_id, transcript_text, summary_md)
-
-        links = ""
-        if os.path.exists(html_path):
-            links += f'<a href="/download/{os.path.basename(html_path)}" target="_blank">📄 Download HTML</a> '
-        if os.path.exists(md_path):
-            links += f'<a href="/download/{os.path.basename(md_path)}" target="_blank">📝 Download Markdown</a> '
-        if os.path.exists(tx_path):
-            links += f'<a href="/download/{os.path.basename(tx_path)}" target="_blank">📄 Download Transcript</a>'
+        # Generate download links with data URLs for serverless environment
+        transcript_data = f"data:text/plain;charset=utf-8,{requests.utils.quote(transcript_text)}"
+        markdown_data = f"data:text/markdown;charset=utf-8,{requests.utils.quote(summary_md)}"
+        html_data = f"data:text/html;charset=utf-8,{requests.utils.quote(download_content['html'])}"
+        
+        links = f'<a href="{transcript_data}" download="{base_id}.txt" target="_blank">📄 Download Transcript</a> '
+        links += f'<a href="{markdown_data}" download="{base_id}.md" target="_blank">📝 Download Markdown</a> '
+        links += f'<a href="{html_data}" download="{base_id}.html" target="_blank">📄 Download HTML</a>'
 
         # Inline preview
         preview_html = f"""
