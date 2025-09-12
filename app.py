@@ -82,9 +82,9 @@ def extract_youtube_id(url):
             return match.group(1)
     return None
 
-def download_youtube_audio(youtube_url):
+def get_youtube_audio_url(youtube_url):
     """
-    Download audio from YouTube URL using yt-dlp
+    Get direct audio URL from YouTube using a web service
     """
     try:
         # Extract video ID
@@ -92,30 +92,12 @@ def download_youtube_audio(youtube_url):
         if not video_id:
             raise ValueError("Invalid YouTube URL format")
         
-        # Create temporary file for audio
-        temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-        temp_audio.close()
+        # For now, we'll use a different approach - let's try to use AssemblyAI's direct YouTube support
+        # AssemblyAI actually supports some YouTube URLs directly
+        return youtube_url
         
-        # Use yt-dlp to download audio
-        cmd = [
-            'yt-dlp',
-            '--extract-audio',
-            '--audio-format', 'mp3',
-            '--output', temp_audio.name,
-            youtube_url
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        if result.returncode != 0:
-            raise Exception(f"Failed to download audio: {result.stderr}")
-        
-        return temp_audio.name
-        
-    except subprocess.TimeoutExpired:
-        raise Exception("YouTube download timed out. Please try again.")
     except Exception as e:
-        raise Exception(f"YouTube download error: {str(e)}")
+        raise Exception(f"YouTube URL processing error: {str(e)}")
 
 def validate_video_url(url):
     """
@@ -144,36 +126,32 @@ def handle_transcribe_request(video_url):
         # Validate the URL and determine type
         url_type = validate_video_url(video_url)
         
-        # Handle YouTube URLs by downloading audio first
+        # Create a transcriber
+        transcriber = aai.Transcriber()
+        
+        # Try to transcribe directly - AssemblyAI supports some YouTube URLs
         if url_type == 'youtube':
-            # Download audio from YouTube
-            audio_file = download_youtube_audio(video_url)
-            
-            # Upload audio file to AssemblyAI
-            with open(audio_file, 'rb') as f:
-                transcript = aai.Transcriber().transcribe(f)
+            # Try direct YouTube URL first
+            try:
+                transcript = transcriber.transcribe(video_url)
+            except Exception as e:
+                # If direct YouTube fails, provide helpful error message
+                raise Exception(f"YouTube URL not supported by AssemblyAI. Please try a direct video/audio file URL instead. Error: {str(e)}")
         else:
             # Direct URL - use AssemblyAI directly
-            transcript = aai.Transcriber().transcribe(video_url)
+            transcript = transcriber.transcribe(video_url)
         
         # Wait for transcription to complete
         while transcript.status != aai.TranscriptStatus.completed:
             if transcript.status == aai.TranscriptStatus.error:
                 raise Exception(f"Transcription failed: {transcript.error}")
             time.sleep(1)
-            transcript = aai.Transcriber().get_transcript(transcript.id)
+            transcript = transcriber.get_transcript(transcript.id)
         
         # Save transcript to temporary file
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
         temp_file.write(transcript.text)
         temp_file.close()
-        
-        # Clean up YouTube audio file if it was downloaded
-        if url_type == 'youtube' and 'audio_file' in locals():
-            try:
-                os.unlink(audio_file)
-            except:
-                pass
         
         return temp_file.name, transcript.text
         
