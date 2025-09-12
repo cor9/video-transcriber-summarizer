@@ -55,7 +55,7 @@ def transcribe_with_assemblyai_media_url(media_url: str, poll_secs: float = 2.5,
     waited = 0
     while True:
         try:
-            tx = aai.Transcriber().get_transcript(tx.id)
+            tx = aai.Transcriber().get(tx.id)
         except Exception as e:
             return None, f"AssemblyAI poll error: {e}"
         if tx.status in (aai.TranscriptStatus.completed, aai.TranscriptStatus.error):
