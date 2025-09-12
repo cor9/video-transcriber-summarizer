@@ -10,8 +10,10 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime
+import logging
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
 
 # HTML Template
 HTML_TEMPLATE = '''
@@ -292,82 +294,117 @@ def index():
 @app.route('/process', methods=['POST'])
 def process_video():
     try:
+        from gemini_summarize import (
+            summarize_with_gemini,
+            cleanup_transcript,
+            baseline_summary
+        )
+        
         data = request.get_json()
         video_url = data.get('video_url')
         summary_format = data.get('summary_format', 'bullet_points')
-        
+
         if not video_url:
             return jsonify({'error': 'Video URL is required'}), 400
-        
-        # Generate unique session ID
+
         session_id = str(uuid.uuid4())[:8]
-        
-        # Set environment variables for make
+
+        # prepare env for the make workflow (if you still need Assembly/Anthropic there)
         env = os.environ.copy()
         env['ASSEMBLYAI_API_KEY'] = os.getenv('ASSEMBLYAI_API_KEY', '')
-        env['ANTHROPIC_API_KEY'] = os.getenv('ANTHROPIC_API_KEY', '')
-        
-        # Run make command
+        env['ANTHROPIC_API_KEY']   = os.getenv('ANTHROPIC_API_KEY', '')
+
+        # Run your existing pipeline to produce transcript/summary files
         cmd = ['make', f'YOUTUBE_URL={video_url}', f'SUMMARY_TYPE={summary_format}']
-        
-        print(f"Running command: {' '.join(cmd)}")
+        app.logger.info("Running: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=os.getcwd())
-        
+
         if result.returncode != 0:
-            return jsonify({
-                'error': f'Processing failed: {result.stderr}',
-                'stdout': result.stdout
-            }), 500
-        
-        # Read the generated files
+            # We'll still try to proceed if a transcript file happens to exist (e.g., prior run),
+            # but otherwise report the error.
+            app.logger.error("make failed rc=%s stdout=%s stderr=%s",
+                             result.returncode, result.stdout, result.stderr)
+
         video_id = extract_video_id(video_url)
         if not video_id:
             return jsonify({'error': 'Could not extract video ID from URL'}), 400
-        
+
         transcript_file = f'transcripts/{video_id}.txt'
-        summary_file = f'summaries/{video_id}.md'
-        html_file = f'summaries/{video_id}.html'
-        
-        # Read transcript
-        transcript_content = ""
+        summary_file    = f'summaries/{video_id}.md'
+        html_file       = f'summaries/{video_id}.html'
+
+        # Load transcript (if produced)
+        raw_transcript = ""
         if os.path.exists(transcript_file):
             with open(transcript_file, 'r', encoding='utf-8') as f:
-                transcript_content = f.read()
-        
-        # Read summary
+                raw_transcript = f.read()
+        else:
+            app.logger.warning("Transcript file missing: %s", transcript_file)
+
+        # Clean "No text" noise etc.
+        cleaned_transcript = cleanup_transcript(raw_transcript)
+
+        # Decide summary source:
+        # - Prefer Gemini if key present and we actually have text
+        # - Else fall back to file summary if it exists
+        # - Else baseline fallback
         summary_content = ""
-        if os.path.exists(summary_file):
-            with open(summary_file, 'r', encoding='utf-8') as f:
-                summary_content = f.read()
-        
-        # Create download links
-        download_links = ""
+        if os.getenv("GEMINI_API_KEY") and cleaned_transcript.strip():
+            app.logger.info("Using Gemini for summary (format=%s)", summary_format)
+            try:
+                summary_content = summarize_with_gemini(
+                    os.environ["GEMINI_API_KEY"], cleaned_transcript, summary_format
+                )
+            except Exception as e:
+                app.logger.exception("Gemini summarization failed; falling back. %s", e)
+                # try file summary or baseline
+                if os.path.exists(summary_file):
+                    with open(summary_file, 'r', encoding='utf-8') as f:
+                        summary_content = f.read().strip()
+                else:
+                    summary_content = baseline_summary(cleaned_transcript, summary_format)
+        else:
+            if os.path.exists(summary_file):
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    summary_content = f.read().strip()
+                if not summary_content:
+                    summary_content = baseline_summary(cleaned_transcript, summary_format)
+            else:
+                summary_content = baseline_summary(cleaned_transcript, summary_format)
+
+        # Build download links if artifacts exist
+        links = []
         if os.path.exists(html_file):
-            download_links += f'<a href="/download/{video_id}.html" target="_blank">📄 Download HTML</a>'
+            links.append(f'<a href="/download/{video_id}.html" target="_blank">📄 Download HTML</a>')
         if os.path.exists(summary_file):
-            download_links += f'<a href="/download/{video_id}.md" target="_blank">📝 Download Markdown</a>'
+            links.append(f'<a href="/download/{video_id}.md" target="_blank">📝 Download Markdown</a>')
         if os.path.exists(transcript_file):
-            download_links += f'<a href="/download/{video_id}.txt" target="_blank">📄 Download Transcript</a>'
-        
-        # Format response
+            links.append(f'<a href="/download/{video_id}.txt" target="_blank">📄 Download Transcript</a>')
+        download_links = "".join(links)
+
+        # Render formatted content
         formatted_content = f"""
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">{transcript_content}</div>
-            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">
+{cleaned_transcript}
+            </div>
             <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({summary_format.replace('_', ' ').title()})</h3>
-            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">{summary_content}</div>
+            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db; white-space: pre-wrap;">
+{summary_content}
+            </div>
         </div>
         """
-        
+
         return jsonify({
             'success': True,
             'transcript': formatted_content,
             'download_links': download_links,
             'message': 'Video processed successfully!'
         })
-        
+
     except Exception as e:
+        app.logger.exception("Unhandled error in /process")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/download/<filename>')
@@ -392,19 +429,30 @@ def download_file(filename):
         return jsonify({'error': str(e)}), 500
 
 def extract_video_id(url):
-    """Extract YouTube video ID from URL"""
-    import re
-    patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)',
-        r'youtube\.com\/v\/([^&\n?#]+)',
-        r'youtube\.com\/watch\?.*v=([^&\n?#]+)'
-    ]
+    """Extract YouTube video ID from URL using robust urllib.parse"""
+    from urllib.parse import urlparse, parse_qs
     
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+    u = urlparse(url)
+    host = (u.netloc or "").lower()
+    
+    if host in ("youtu.be", "www.youtu.be"):
+        return u.path.lstrip("/") or None
+    
+    if "youtube.com" in host or "youtube-nocookie.com" in host:
+        qs = parse_qs(u.query or "")
+        if "v" in qs and qs["v"]:
+            return qs["v"][0]
+        
+        parts = [p for p in (u.path or "").split("/") if p]
+        # /embed/{id}, /v/{id}
+        if parts and parts[0] in ("embed", "v"):
+            return parts[1] if len(parts) > 1 else None
+    
     return None
+
+def canonical_watch_url(video_id: str) -> str:
+    """Generate canonical YouTube watch URL"""
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
