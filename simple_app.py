@@ -1,242 +1,147 @@
 #!/usr/bin/env python3
 """
-Simple VidScribe2AI - Direct approach without complex architecture
-Just two steps: Get transcript -> Get summary
+A simple, self-contained YouTube summarizer using Flask and the Gemini API.
 """
-
-from flask import Flask, request, jsonify, render_template_string
 import os
-import re
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from flask import Flask, request, render_template_string
+from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
-import logging
+from urllib.parse import urlparse, parse_qs
 
+# --- 1. SETUP ---
 app = Flask(__name__)
-app.logger.setLevel(logging.INFO)
 
-# Configure Gemini
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
+def get_video_id(url):
+    """Extracts the YouTube video ID from a URL."""
+    if not url:
+        return None
+    
+    query = urlparse(url)
+    if "youtu.be" in query.hostname:
+        return query.path[1:]
+    if "youtube.com" in query.hostname:
+        if query.path == '/watch':
+            return parse_qs(query.query).get('v', [None])[0]
+        if query.path.startswith(('/embed/', '/v/')):
+            return query.path.split('/')[2]
+            
+    return None # Return None if no ID is found
+
+# Configure the Gemini API
+# IMPORTANT: You must set this environment variable in your terminal
+# before running the script. Example:
+# export GEMINI_API_KEY='YOUR_API_KEY_HERE'
+try:
+    api_key = os.environ["GEMINI_API_KEY"]
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-pro')
+except KeyError:
+    print("FATAL: Please set the GEMINI_API_KEY environment variable.")
     model = None
 
-# Simple HTML template
-HTML_TEMPLATE = '''
+# --- 2. HTML TEMPLATES (for simplicity, we keep them in the Python file) ---
+
+# This is the main page with the input form
+HTML_FORM = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VidScribe2AI - Simple Version</title>
+    <title>Simple YouTube Summarizer</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .form-group { margin-bottom: 20px; }
-        input, select, textarea { width: 100%; padding: 10px; margin: 5px 0; }
-        button { background: #007bff; color: white; padding: 15px 30px; border: none; cursor: pointer; }
-        .results { margin-top: 20px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
-        .error { color: red; }
-        .loading { color: blue; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f9f9f9; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        form { margin-top: 20px; }
+        input[type=url] { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; margin-top: 10px; font-size: 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .error { color: #d93025; font-weight: bold; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <h1>🚀 VidScribe2AI - Simple Version</h1>
-    <p>Paste a YouTube URL or any text to get an AI summary!</p>
-    
-    <form id="form">
-        <div class="form-group">
-            <label>Input Type:</label>
-            <select id="inputType">
-                <option value="youtube">YouTube URL</option>
-                <option value="text">Paste Text</option>
-            </select>
-        </div>
-        
-        <div class="form-group" id="youtubeGroup">
-            <label>YouTube URL:</label>
-            <input type="url" id="youtubeUrl" placeholder="https://youtube.com/watch?v=...">
-        </div>
-        
-        <div class="form-group" id="textGroup" style="display:none;">
-            <label>Text to Summarize:</label>
-            <textarea id="textInput" rows="10" placeholder="Paste any text here..."></textarea>
-        </div>
-        
-        <div class="form-group">
-            <label>Summary Style:</label>
-            <select id="summaryStyle">
-                <option value="bullet_points">📝 Bullet Points</option>
-                <option value="key_insights">💡 Key Insights</option>
-                <option value="detailed_summary">📋 Detailed Summary</option>
-            </select>
-        </div>
-        
-        <button type="submit">🚀 Get Summary</button>
+    <h1>Simple YouTube Summarizer</h1>
+    <form action="/summarize" method="post">
+        <label for="youtube_url">Enter YouTube Video URL:</label>
+        <input type="url" id="youtube_url" name="youtube_url" required placeholder="https://www.youtube.com/watch?v=...">
+        <button type="submit">Summarize</button>
     </form>
-    
-    <div id="status"></div>
-    <div id="results"></div>
-
-    <script>
-        document.getElementById('inputType').addEventListener('change', function() {
-            const type = this.value;
-            document.getElementById('youtubeGroup').style.display = type === 'youtube' ? 'block' : 'none';
-            document.getElementById('textGroup').style.display = type === 'text' ? 'block' : 'none';
-        });
-
-        document.getElementById('form').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const inputType = document.getElementById('inputType').value;
-            const summaryStyle = document.getElementById('summaryStyle').value;
-            
-            document.getElementById('status').innerHTML = '<div class="loading">🔄 Processing...</div>';
-            document.getElementById('results').innerHTML = '';
-            
-            try {
-                let response;
-                
-                if (inputType === 'youtube') {
-                    const url = document.getElementById('youtubeUrl').value;
-                    if (!url) throw new Error('Please enter a YouTube URL');
-                    
-                    response = await fetch('/api/summarize', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ youtube_url: url, summary_style: summaryStyle })
-                    });
-                } else {
-                    const text = document.getElementById('textInput').value;
-                    if (!text.trim()) throw new Error('Please enter some text');
-                    
-                    response = await fetch('/api/summarize', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: text, summary_style: summaryStyle })
-                    });
-                }
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    document.getElementById('status').innerHTML = '<div style="color: green;">✅ Success!</div>';
-                    document.getElementById('results').innerHTML = `
-                        <h3>📝 Transcript:</h3>
-                        <div style="background: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; max-height: 200px; overflow-y: auto;">
-                            ${data.transcript}
-                        </div>
-                        <h3>🎯 Summary:</h3>
-                        <div style="background: white; padding: 15px; border-radius: 5px;">
-                            ${data.summary}
-                        </div>
-                    `;
-                } else {
-                    throw new Error(data.error);
-                }
-            } catch (error) {
-                document.getElementById('status').innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
-            }
-        });
-    </script>
+    {% if error %}
+        <p class="error">Error: {{ error }}</p>
+    {% endif %}
 </body>
 </html>
-'''
+"""
 
-def extract_video_id(url):
-    """Extract YouTube video ID from URL"""
-    patterns = [
-        r'(?:v=|youtu\.be/|/embed/|/shorts/)([A-Za-z0-9_-]{11})',
-        r'youtube\.com/watch\?v=([A-Za-z0-9_-]{11})',
-        r'youtu\.be/([A-Za-z0-9_-]{11})'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+# This page displays the results
+HTML_RESULT = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Summary Result</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f9f9f9; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h2 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        div { background-color: #fff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.6; }
+        a { color: #007bff; }
+    </style>
+</head>
+<body>
+    <h1>Summary Result</h1>
+    <a href="/">Summarize another video</a>
+    <h2>✨ AI Summary</h2>
+    <div><pre>{{ summary }}</pre></div>
+    <h2>📜 Full Transcript</h2>
+    <div><pre>{{ transcript }}</pre></div>
+</body>
+</html>
+"""
 
-def get_youtube_transcript(video_id):
-    """Get transcript from YouTube - Step 1"""
-    try:
-        # Try different language preferences
-        for langs in (['en'], ['en-US', 'en-GB'], ['en'], []):
-            try:
-                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=langs or None)
-                # Clean up the transcript
-                text = ' '.join([item['text'] for item in transcript if item['text'].strip()])
-                return text
-            except (TranscriptsDisabled, NoTranscriptFound):
-                continue
-        
-        raise RuntimeError(f"No transcript available for video {video_id}")
-        
-    except Exception as e:
-        app.logger.error(f"Failed to get transcript: {e}")
-        raise
-
-def get_ai_summary(text, style):
-    """Get AI summary from Gemini - Step 2"""
-    if not model:
-        return "⚠️ Gemini API key not configured. Please set GEMINI_API_KEY environment variable."
-    
-    try:
-        # Create prompt based on style
-        prompts = {
-            'bullet_points': "Summarize this text into clear bullet points:",
-            'key_insights': "Extract the key insights and main takeaways from this text:",
-            'detailed_summary': "Provide a detailed summary of this text:"
-        }
-        
-        prompt = f"{prompts.get(style, prompts['bullet_points'])}\n\n{text}"
-        
-        response = model.generate_content(prompt)
-        return response.text
-        
-    except Exception as e:
-        app.logger.error(f"Failed to get AI summary: {e}")
-        return f"⚠️ AI summary failed: {str(e)}"
+# --- 3. FLASK ROUTES ---
 
 @app.route('/')
 def index():
-    return HTML_TEMPLATE
+    # Show the main form
+    return render_template_string(HTML_FORM)
 
-@app.route('/api/summarize', methods=['POST'])
+@app.route('/summarize', methods=['POST'])
 def summarize():
-    """The main endpoint - just two steps!"""
-    try:
-        data = request.get_json()
-        youtube_url = data.get('youtube_url')
-        text = data.get('text')
-        summary_style = data.get('summary_style', 'bullet_points')
-        
-        # Step 1: Get transcript
-        if youtube_url:
-            video_id = extract_video_id(youtube_url)
-            if not video_id:
-                return jsonify({'success': False, 'error': 'Invalid YouTube URL'})
-            
-            transcript = get_youtube_transcript(video_id)
-            if not transcript.strip():
-                return jsonify({'success': False, 'error': 'No transcript found for this video'})
-        elif text:
-            transcript = text.strip()
-        else:
-            return jsonify({'success': False, 'error': 'Either YouTube URL or text is required'})
-        
-        # Step 2: Get AI summary
-        summary = get_ai_summary(transcript, summary_style)
-        
-        return jsonify({
-            'success': True,
-            'transcript': transcript,
-            'summary': summary
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Summarization failed: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+    youtube_url = request.form['youtube_url']
 
+    # --- Step 1: Get the transcript ---
+    try:
+        # Extract video ID from URL using robust function
+        video_id = get_video_id(youtube_url)
+        if not video_id:
+            return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
+        
+        # Fetch the transcript
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        # Combine the transcript text into a single string
+        transcript_text = " ".join([item['text'] for item in transcript_list])
+    except Exception as e:
+        # Handle errors (e.g., invalid URL, no transcript available)
+        return render_template_string(HTML_FORM, error=f"Could not get transcript: {e}")
+
+    # --- Step 2: Get the summary ---
+    if not model:
+        return render_template_string(HTML_FORM, error="AI Model is not configured. Did you set your API key?")
+    
+    try:
+        # Create a prompt for the AI
+        prompt = f"Please provide a concise, easy-to-read, bullet-point summary of the following video transcript:\n\n---\n{transcript_text}\n---"
+        # Call the AI model
+        response = model.generate_content(prompt)
+        summary_text = response.text
+    except Exception as e:
+        # Handle errors from the AI API
+        return render_template_string(HTML_FORM, error=f"Could not generate summary: {e}")
+
+    # Display the results
+    return render_template_string(HTML_RESULT, summary=summary_text, transcript=transcript_text)
+
+# --- 4. RUN THE APP ---
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    # Use port 5001 to avoid conflicts with other common ports
+    app.run(debug=True, port=5001)
