@@ -198,13 +198,50 @@ HTML_TEMPLATE = '''
         <div class="form-container">
             <form id="transcribeForm">
                 <div class="form-group">
+                    <label>Input Method</label>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: inline-block; margin-right: 20px; cursor: pointer;">
+                            <input type="radio" name="inputMethod" value="url" checked style="margin-right: 5px;">
+                            📹 Video URL
+                        </label>
+                        <label style="display: inline-block; margin-right: 20px; cursor: pointer;">
+                            <input type="radio" name="inputMethod" value="file" style="margin-right: 5px;">
+                            📁 Upload File
+                        </label>
+                        <label style="display: inline-block; cursor: pointer;">
+                            <input type="radio" name="inputMethod" value="paste" style="margin-right: 5px;">
+                            📝 Paste Text
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="urlGroup">
                     <label for="videoUrl">Video/Audio URL</label>
-                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4" required>
+                    <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4">
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
                         🎥 <strong>Supported Input Types:</strong><br>
                         ✅ <strong>Direct media URLs:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
                         ⚠️ <strong>YouTube URLs:</strong> Limited support due to restrictions<br>
                         💡 <em>For best results: Use direct media URLs or download YouTube videos manually</em>
+                    </small>
+                </div>
+
+                <div class="form-group" id="fileGroup" style="display: none;">
+                    <label for="subtitleFile">Upload File</label>
+                    <input type="file" id="subtitleFile" name="subtitleFile" accept=".srt,.vtt,.txt,.mp4,.mp3,.wav,.m4a,.webm,.ogg,.flac,.aac">
+                    <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
+                        📁 <strong>Supported File Types:</strong><br>
+                        📝 <strong>Text files:</strong> SRT, VTT, TXT (transcripts/subtitles)<br>
+                        🎵 <strong>Media files:</strong> MP4, MP3, WAV, M4A, WebM, OGG, FLAC, AAC<br>
+                        💡 <em>Upload subtitle files when YouTube is rate-limited, or media files for transcription</em>
+                    </small>
+                </div>
+
+                <div class="form-group" id="pasteGroup" style="display: none;">
+                    <label for="pastedText">Paste Transcript</label>
+                    <textarea id="pastedText" name="pastedText" rows="8" placeholder="Paste your transcript text here..."></textarea>
+                    <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
+                        📝 <strong>Paste any transcript text</strong> - we'll clean it up and summarize it instantly
                     </small>
                 </div>
 
@@ -219,7 +256,7 @@ HTML_TEMPLATE = '''
 
                 <div class="form-group">
                     <label for="contextHints">Context Hints (optional)</label>
-                    <textarea id="contextHints" name="contextHints" rows="3" placeholder="Audience, tone, use cases, what to emphasize (e.g., 'Audience: developers; tone: technical; focus on implementation details')"></textarea>
+                    <textarea id="contextHints" name="contextHints" rows="3" placeholder="Audience, tone, use cases, what to emphasize (e.g., &quot;Audience: developers; tone: technical; focus on implementation details&quot;)"></textarea>
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
                         💡 <strong>Examples:</strong><br>
                         • "Audience: parents; tone: practical; include safety tips"<br>
@@ -278,10 +315,20 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
-        document.getElementById('transcribeForm').addEventListener('submit', async function(e) {
+        // Handle input method switching
+        document.querySelectorAll("input[name=\"inputMethod\"]").forEach(radio => {
+            radio.addEventListener("change", function() {
+                const method = this.value;
+                document.getElementById("urlGroup").style.display = method === "url" ? "block" : "none";
+                document.getElementById("fileGroup").style.display = method === "file" ? "block" : "none";
+                document.getElementById("pasteGroup").style.display = method === "paste" ? "block" : "none";
+            });
+        });
+
+        document.getElementById("transcribeForm").addEventListener("submit", async function(e) {
             e.preventDefault();
             
-            const videoUrl = document.getElementById('videoUrl').value;
+            const inputMethod = document.querySelector("input[name=\"inputMethod\"]:checked").value;
             const summaryFormat = document.getElementById('summaryFormat').value;
             const contextHints = document.getElementById('contextHints').value
                 .split('\n')
@@ -290,24 +337,66 @@ HTML_TEMPLATE = '''
             
             // Show progress, hide other elements
             document.getElementById('submitBtn').disabled = true;
-            document.getElementById('submitBtn').textContent = '🔄 Processing...';
+            document.getElementById("submitBtn").textContent = "🔄 Processing...";
             document.getElementById('results').style.display = 'none';
             document.getElementById('error').style.display = 'none';
             document.getElementById('progress').style.display = 'block';
             document.getElementById('progressText').textContent = 'Processing video...';
             
             try {
-                const response = await fetch('/api/submit', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        video_url: videoUrl,
-                        summary_format: summaryFormat,
-                        context_hints: contextHints
-                    })
-                });
+                let response;
+                
+                if (inputMethod === 'file') {
+                    const fileInput = document.getElementById('subtitleFile');
+                    if (!fileInput.files[0]) {
+                        throw new Error('Please select a file to upload');
+                    }
+                    
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    formData.append('summary_format', summaryFormat);
+                    formData.append('context_hints', JSON.stringify(contextHints));
+                    
+                    response = await fetch('/api/submit', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else if (inputMethod === 'paste') {
+                    const pastedText = document.getElementById('pastedText').value.trim();
+                    if (!pastedText) {
+                        throw new Error('Please paste some text to summarize');
+                    }
+                    
+                    response = await fetch('/api/submit', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            pasted_text: pastedText,
+                            summary_format: summaryFormat,
+                            context_hints: contextHints
+                        })
+                    });
+                } else {
+                    // URL method
+                    const videoUrl = document.getElementById('videoUrl').value;
+                    if (!videoUrl) {
+                        throw new Error('Please enter a video URL');
+                    }
+                    
+                    response = await fetch('/api/submit', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            video_url: videoUrl,
+                            summary_format: summaryFormat,
+                            context_hints: contextHints
+                        })
+                    });
+                }
                 
                 const data = await response.json();
                 
@@ -321,7 +410,7 @@ HTML_TEMPLATE = '''
                 document.getElementById('error').style.display = 'block';
             } finally {
                 document.getElementById('submitBtn').disabled = false;
-                document.getElementById('submitBtn').textContent = '🚀 Process Video';
+                document.getElementById("submitBtn").textContent = "🚀 Process Video";
                 document.getElementById('progress').style.display = 'none';
             }
         });
@@ -346,26 +435,28 @@ HTML_TEMPLATE = '''
             document.getElementById('downloadLinks').innerHTML = linksHtml;
             
             // Show results
-            document.getElementById('transcriptContent').innerHTML = `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
-                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">
-                        ${data.transcript || 'No transcript available'}
-                    </div>
-                    
-                    <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary (${data.summary_format ? data.summary_format.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Bullet Points'})</h3>
-                    <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">
-                        ${data.summary_html || data.summary_md || 'No summary available'}
-                    </div>
-                    
-                    ${data.meta ? `
-                    <div style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px; font-size: 12px; color: #666;">
-                        <strong>Source:</strong> ${data.meta.captions_source || 'Unknown'} | 
-                        <strong>Processing:</strong> Direct Cloud Run
-                    </div>
-                    ` : ''}
+            const transcriptText = data.transcript || 'No transcript available';
+            const summaryText = data.summary_html || data.summary_md || 'No summary available';
+            const summaryFormat = data.summary_format ? data.summary_format.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase()) : 'Bullet Points';
+            const metaHtml = data.meta ? `
+                <div style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px; font-size: 12px; color: #666;">
+                    <strong>Source:</strong> ${data.meta.captions_source || 'Unknown'} | 
+                    <strong>Processing:</strong> Direct Cloud Run
                 </div>
-            `;
+            ` : '';
+            
+            document.getElementById('transcriptContent').innerHTML = 
+                '<div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">' +
+                    '<h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>' +
+                    '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">' +
+                        transcriptText +
+                    '</div>' +
+                    '<h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary (' + summaryFormat + ')</h3>' +
+                    '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db;">' +
+                        summaryText +
+                    '</div>' +
+                    metaHtml +
+                '</div>';
             document.getElementById('results').style.display = 'block';
         }
 
@@ -616,6 +707,23 @@ def extract_video_id(url):
 def canonical_watch_url(video_id: str) -> str:
     """Generate canonical YouTube watch URL"""
     return f"https://www.youtube.com/watch?v={video_id}"
+
+# Static file serving routes
+@app.route('/favicon.ico')
+def favicon():
+    return send_file('favicon.ico')
+
+@app.route('/sitelogo.svg')
+def sitelogo():
+    return send_file('sitelogo.svg')
+
+@app.route('/logoimage.svg')
+def logoimage():
+    return send_file('logoimage.svg')
+
+@app.route('/title.svg')
+def title():
+    return send_file('title.svg')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
