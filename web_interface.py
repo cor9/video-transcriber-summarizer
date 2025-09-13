@@ -6,10 +6,10 @@ import os
 import time
 import random
 import tempfile
-import subprocess
 from flask import Flask, request, render_template_string
 import google.generativeai as genai
 import assemblyai as aai
+from pytube import YouTube
 from urllib.parse import urlparse, parse_qs
 
 # --- 1. SETUP ---
@@ -32,30 +32,26 @@ def get_video_id(url):
     return None # Return None if no ID is found
 
 def download_youtube_audio(video_url):
-    """Download audio from YouTube using yt-dlp"""
+    """Download audio from YouTube using pytube"""
     try:
+        # Create YouTube object
+        yt = YouTube(video_url)
+        
+        # Get the best audio stream
+        audio_stream = yt.streams.filter(only_audio=True).first()
+        
+        if not audio_stream:
+            raise Exception("No audio stream available for this video")
+        
         # Create temporary file for audio
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
             temp_path = temp_file.name
         
-        # Use yt-dlp to download audio
-        cmd = [
-            'yt-dlp',
-            '--extract-audio',
-            '--audio-format', 'mp3',
-            '--output', temp_path,
-            video_url
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        if result.returncode != 0:
-            raise Exception(f"yt-dlp failed: {result.stderr}")
+        # Download the audio
+        audio_stream.download(filename=temp_path)
         
         return temp_path
         
-    except subprocess.TimeoutExpired:
-        raise Exception("YouTube download timed out")
     except Exception as e:
         raise Exception(f"Failed to download audio: {str(e)}")
 
