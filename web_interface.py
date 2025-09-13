@@ -170,7 +170,7 @@ def get_youtube_transcript(video_id):
             except (TranscriptsDisabled, NoTranscriptFound):
                 continue
         
-        raise NoTranscriptFound(f"No transcript available for video {video_id}")
+        raise RuntimeError(f"No transcript available for video {video_id}")
         
     except Exception as e:
         app.logger.error(f"Failed to get transcript: {e}")
@@ -239,4 +239,4 @@ def summarize():
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)
