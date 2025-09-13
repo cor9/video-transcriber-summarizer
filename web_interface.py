@@ -3,6 +3,8 @@
 A simple, self-contained YouTube summarizer using Flask and the Gemini API.
 """
 import os
+import time
+import random
 from flask import Flask, request, render_template_string
 from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
@@ -26,6 +28,28 @@ def get_video_id(url):
             return query.path.split('/')[2]
             
     return None # Return None if no ID is found
+
+def get_transcript_with_retry(video_id, max_retries=3):
+    """Get transcript with retry logic and rate limiting"""
+    for attempt in range(max_retries):
+        try:
+            # Add random delay to avoid rate limiting
+            if attempt > 0:
+                delay = random.uniform(2, 5) * (attempt + 1)
+                time.sleep(delay)
+            
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            return transcript_list
+        except Exception as e:
+            if "Too Many Requests" in str(e) or "429" in str(e):
+                if attempt < max_retries - 1:
+                    app.logger.warning(f"Rate limited, retrying in {delay:.1f}s (attempt {attempt + 1})")
+                    continue
+                else:
+                    raise Exception("YouTube rate limit exceeded. Please try again in a few minutes.")
+            else:
+                raise e
+    return None
 
 # Configure the Gemini API
 # IMPORTANT: You must set this environment variable in your terminal
@@ -116,8 +140,8 @@ def summarize():
         if not video_id:
             return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
-        # Fetch the transcript
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        # Fetch the transcript with retry logic
+        transcript_list = get_transcript_with_retry(video_id)
         # Combine the transcript text into a single string
         transcript_text = " ".join([item['text'] for item in transcript_list])
     except Exception as e:
