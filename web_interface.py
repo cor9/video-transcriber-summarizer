@@ -140,12 +140,20 @@ def summarize():
         if not video_id:
             return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
+        # Debug: Check if the library is available
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            app.logger.info("YouTubeTranscriptApi imported successfully")
+        except ImportError as import_error:
+            return render_template_string(HTML_FORM, error=f"Library import error: {import_error}")
+        
         # Fetch the transcript with retry logic
         transcript_list = get_transcript_with_retry(video_id)
         # Combine the transcript text into a single string
         transcript_text = " ".join([item['text'] for item in transcript_list])
     except Exception as e:
         # Handle errors (e.g., invalid URL, no transcript available)
+        app.logger.error(f"Transcript error: {e}")
         return render_template_string(HTML_FORM, error=f"Could not get transcript: {e}")
 
     # --- Step 2: Get the summary ---
