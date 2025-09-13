@@ -5,11 +5,9 @@ A simple, self-contained YouTube summarizer using Flask and the Gemini API.
 import os
 import time
 import random
-import tempfile
 from flask import Flask, request, render_template_string
 import google.generativeai as genai
-import assemblyai as aai
-from pytube import YouTube
+from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 
 # --- 1. SETUP ---
@@ -31,57 +29,28 @@ def get_video_id(url):
             
     return None # Return None if no ID is found
 
-def download_youtube_audio(video_url):
-    """Download audio from YouTube using pytube"""
-    try:
-        # Create YouTube object
-        yt = YouTube(video_url)
-        
-        # Get the best audio stream
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        
-        if not audio_stream:
-            raise Exception("No audio stream available for this video")
-        
-        # Create temporary file for audio
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-            temp_path = temp_file.name
-        
-        # Download the audio
-        audio_stream.download(filename=temp_path)
-        
-        return temp_path
-        
-    except Exception as e:
-        raise Exception(f"Failed to download audio: {str(e)}")
-
-def transcribe_with_assemblyai(audio_file_path):
-    """Transcribe audio using AssemblyAI"""
-    try:
-        # Check if API key is set
-        api_key = os.getenv("ASSEMBLYAI_API_KEY")
-        if not api_key:
-            raise Exception("ASSEMBLYAI_API_KEY environment variable is not set")
-        
-        # Configure AssemblyAI
-        aai.settings.api_key = api_key
-        
-        # Upload and transcribe file
-        with open(audio_file_path, 'rb') as f:
-            transcript = aai.Transcriber().transcribe(f)
-        
-        # Wait for transcription to complete
-        while transcript.status not in [aai.TranscriptStatus.completed, aai.TranscriptStatus.error]:
-            time.sleep(2)
-            transcript = aai.Transcriber().get_transcript(transcript.id)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            raise Exception(f"Transcription failed: {transcript.error}")
-        
-        return transcript.text
-        
-    except Exception as e:
-        raise Exception(f"AssemblyAI transcription failed: {str(e)}")
+def get_transcript_simple(video_id):
+    """Get transcript using YouTube's transcript API with retry logic"""
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            # Add delay between attempts
+            if attempt > 0:
+                delay = random.uniform(1, 3)
+                time.sleep(delay)
+            
+            # Get transcript
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            transcript_text = " ".join([item['text'] for item in transcript_list])
+            return transcript_text
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise Exception(f"Could not get transcript: {str(e)}")
+            continue
+    
+    return None
 
 # Configure the Gemini API
 # IMPORTANT: You must set this environment variable in your terminal
@@ -116,11 +85,11 @@ HTML_FORM = """
 </head>
 <body>
     <h1>Simple YouTube Summarizer</h1>
-    <p style="color: #666; margin-bottom: 20px;">Downloads audio and transcribes using AssemblyAI for reliable results</p>
+    <p style="color: #666; margin-bottom: 20px;">Gets transcripts directly from YouTube and summarizes with AI</p>
     <form action="/summarize" method="post">
         <label for="youtube_url">Enter YouTube Video URL:</label>
         <input type="url" id="youtube_url" name="youtube_url" required placeholder="https://www.youtube.com/watch?v=...">
-        <button type="submit">Download & Summarize</button>
+        <button type="submit">Summarize</button>
     </form>
     {% if error %}
         <p class="error">Error: {{ error }}</p>
@@ -167,27 +136,19 @@ def summarize():
     youtube_url = request.form['youtube_url']
 
     # --- Step 1: Get the transcript ---
-    audio_file_path = None
     try:
-        # Download audio from YouTube
-        app.logger.info(f"Downloading audio from: {youtube_url}")
-        audio_file_path = download_youtube_audio(youtube_url)
+        # Extract video ID from URL
+        video_id = get_video_id(youtube_url)
+        if not video_id:
+            return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
-        # Transcribe using AssemblyAI
-        app.logger.info("Transcribing audio with AssemblyAI...")
-        transcript_text = transcribe_with_assemblyai(audio_file_path)
+        # Get transcript using YouTube's API
+        transcript_text = get_transcript_simple(video_id)
         
     except Exception as e:
-        # Handle errors (e.g., invalid URL, download failed, transcription failed)
+        # Handle errors
         app.logger.error(f"Transcript error: {e}")
         return render_template_string(HTML_FORM, error=f"Could not get transcript: {e}")
-    finally:
-        # Clean up temporary audio file
-        if audio_file_path and os.path.exists(audio_file_path):
-            try:
-                os.unlink(audio_file_path)
-            except:
-                pass
 
     # --- Step 2: Get the summary ---
     if not model:
