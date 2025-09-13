@@ -208,9 +208,13 @@ HTML_TEMPLATE = '''
                             <input type="radio" name="inputMethod" value="file" style="margin-right: 5px;">
                             📁 Upload File
                         </label>
-                        <label style="display: inline-block; cursor: pointer;">
+                        <label style="display: inline-block; margin-right: 20px; cursor: pointer;">
                             <input type="radio" name="inputMethod" value="paste" style="margin-right: 5px;">
                             📝 Paste Text
+                        </label>
+                        <label style="display: inline-block; cursor: pointer;">
+                            <input type="radio" name="inputMethod" value="demo" style="margin-right: 5px;">
+                            🚀 Try Demo
                         </label>
                     </div>
                 </div>
@@ -243,6 +247,17 @@ HTML_TEMPLATE = '''
                     <small style="color: #666; font-size: 0.9em; margin-top: 5px; display: block;">
                         📝 <strong>Paste any transcript text</strong> - we'll clean it up and summarize it instantly
                     </small>
+                </div>
+
+                <div class="form-group" id="demoGroup" style="display: none;">
+                    <label>Demo Transcript</label>
+                    <div style="padding: 15px; background: #e8f4fd; border-radius: 8px; border-left: 4px solid #3498db;">
+                        <p><strong>🚀 Try the demo!</strong> This will process a sample transcript to show you how the summarization works.</p>
+                        <p style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            The demo uses a sample transcript about artificial intelligence and machine learning. 
+                            Click "Process Video" to see the summarization in action!
+                        </p>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -322,6 +337,7 @@ HTML_TEMPLATE = '''
                 document.getElementById("urlGroup").style.display = method === "url" ? "block" : "none";
                 document.getElementById("fileGroup").style.display = method === "file" ? "block" : "none";
                 document.getElementById("pasteGroup").style.display = method === "paste" ? "block" : "none";
+                document.getElementById("demoGroup").style.display = method === "demo" ? "block" : "none";
             });
         });
 
@@ -374,6 +390,35 @@ HTML_TEMPLATE = '''
                         },
                         body: JSON.stringify({
                             pasted_text: pastedText,
+                            summary_format: summaryFormat,
+                            context_hints: contextHints
+                        })
+                    });
+                } else if (inputMethod === 'demo') {
+                    // Demo transcript about AI and machine learning
+                    const demoText = `Welcome to this comprehensive overview of artificial intelligence and machine learning. Today we'll explore the fundamental concepts that are shaping our digital future.
+
+Artificial intelligence, or AI, refers to the simulation of human intelligence in machines that are programmed to think and learn like humans. The term may also be applied to any machine that exhibits traits associated with a human mind such as learning and problem-solving.
+
+Machine learning is a subset of artificial intelligence that focuses on the development of algorithms and statistical models that enable computer systems to improve their performance on a specific task through experience. Instead of being explicitly programmed to perform every task, machine learning algorithms build mathematical models based on training data to make predictions or decisions.
+
+There are three main types of machine learning: supervised learning, unsupervised learning, and reinforcement learning. Supervised learning uses labeled training data to learn a mapping function from inputs to outputs. Unsupervised learning finds hidden patterns in data without labeled examples. Reinforcement learning learns through interaction with an environment using a system of rewards and penalties.
+
+Deep learning is a subset of machine learning that uses artificial neural networks with multiple layers to model and understand complex patterns in data. These networks are inspired by the structure and function of the human brain, with interconnected nodes that process information.
+
+The applications of AI and machine learning are vast and growing rapidly. They include natural language processing, computer vision, speech recognition, recommendation systems, autonomous vehicles, medical diagnosis, financial trading, and many more.
+
+However, with these powerful capabilities come important considerations about ethics, bias, privacy, and the future of work. As AI systems become more sophisticated, we must ensure they are developed and deployed responsibly.
+
+The field continues to evolve rapidly, with new breakthroughs in areas like large language models, computer vision, and robotics. Understanding these technologies is crucial for anyone looking to navigate our increasingly digital world.`;
+                    
+                    response = await fetch('/api/submit', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            pasted_text: demoText,
                             summary_format: summaryFormat,
                             context_hints: contextHints
                         })

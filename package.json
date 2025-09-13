@@ -1,20 +1,9 @@
 {
-  "name": "vidscribe2ai-hybrid",
+  "name": "vidscribe2ai",
   "version": "1.0.0",
-  "description": "Hybrid VidScribe2AI with Vercel frontend and Google Cloud backend",
-  "main": "index.js",
-  "scripts": {
-    "dev": "vercel dev",
-    "build": "echo 'Build complete'",
-    "deploy": "vercel --prod"
-  },
+  "description": "Video transcription and summarization with AI",
   "dependencies": {
-    "@google-cloud/pubsub": "^4.0.0",
-    "@google-cloud/firestore": "^7.0.0",
-    "google-auth-library": "^9.0.0"
-  },
-  "devDependencies": {
-    "vercel": "^32.0.0"
+    "formidable": "^3.5.1"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -3,14 +3,30 @@
   "name": "vidscribe2ai",
   "builds": [
     {
-      "src": "api/index.py",
+      "src": "api/submit.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/feedback.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "web_interface.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
+      "src": "/api/submit",
+      "dest": "api/submit.js"
+    },
+    {
+      "src": "/api/feedback",
+      "dest": "api/feedback.js"
+    },
+    {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "web_interface.py"
     }
   ],
   "env": {

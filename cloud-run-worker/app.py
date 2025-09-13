@@ -15,27 +15,38 @@ def health():
 def summarize_handler():
     data = request.get_json(force=True)
     url = data.get("url")
+    transcript_text = data.get("transcript_text")
     summary_format = data.get("summary_format", "bullet_points")
     context_hints = data.get("context_hints", [])
     
-    if not url:
-        return jsonify({"error": "url required"}), 400
+    # Either URL or transcript_text must be provided
+    if not url and not transcript_text:
+        return jsonify({"error": "url or transcript_text required"}), 400
     
     try:
-        # Time the caption fetch
-        t0 = time.time()
-        transcript, source = get_captions_text(url)
-        t1 = time.time()
+        if transcript_text:
+            # Direct transcript text (from file upload or paste)
+            transcript = transcript_text
+            source = "direct_input"
+            captions_ms = 0
+        else:
+            # Fetch captions from URL
+            t0 = time.time()
+            transcript, source = get_captions_text(url)
+            t1 = time.time()
+            captions_ms = int((t1-t0)*1000)
         
         # Time the Gemini call
+        t0 = time.time()
         summary_md = summarize(transcript, summary_format, context_hints)
-        t2 = time.time()
+        t1 = time.time()
+        gemini_ms = int((t1-t0)*1000)
         
         # Log timing metrics
         logging.info({
             "evt": "timings",
-            "captions_ms": int((t1-t0)*1000),
-            "gemini_ms": int((t2-t1)*1000),
+            "captions_ms": captions_ms,
+            "gemini_ms": gemini_ms,
             "source": source,
             "transcript_length": len(transcript),
             "summary_length": len(summary_md)
