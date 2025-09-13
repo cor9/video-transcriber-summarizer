@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import uuid
+import json
 from datetime import datetime
 import logging
 
@@ -590,121 +591,165 @@ The field continues to evolve rapidly, with new breakthroughs in areas like larg
 def index():
     return HTML_TEMPLATE
 
-@app.route('/process', methods=['POST'])
+@app.route('/api/submit', methods=['POST'])
 def process_video():
+    """Handle video processing requests - supports both JSON and file uploads"""
     try:
-        from gemini_summarize import (
-            summarize_with_gemini,
-            cleanup_transcript,
-            baseline_summary
-        )
+        # Check if it's a file upload
+        if 'file' in request.files:
+            return handle_file_upload()
         
+        # Handle JSON requests
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         video_url = data.get('video_url')
+        pasted_text = data.get('pasted_text')
         summary_format = data.get('summary_format', 'bullet_points')
+        context_hints = data.get('context_hints', [])
 
-        if not video_url:
-            return jsonify({'error': 'Video URL is required'}), 400
+        # Check if we have either a video URL or pasted text
+        if not video_url and not pasted_text:
+            return jsonify({'error': 'Either video_url or pasted_text is required'}), 400
 
-        session_id = str(uuid.uuid4())[:8]
+        # Get Cloud Run worker URL from environment
+        worker_url = os.getenv('WORKER_URL')
+        if not worker_url:
+            return jsonify({'error': 'WORKER_URL not configured'}), 500
 
-        # prepare env for the make workflow (if you still need Assembly/Anthropic there)
-        env = os.environ.copy()
-        env['ASSEMBLYAI_API_KEY'] = os.getenv('ASSEMBLYAI_API_KEY', '')
-        env['ANTHROPIC_API_KEY']   = os.getenv('ANTHROPIC_API_KEY', '')
-
-        # Run your existing pipeline to produce transcript/summary files
-        cmd = ['make', f'YOUTUBE_URL={video_url}', f'SUMMARY_TYPE={summary_format}']
-        app.logger.info("Running: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=os.getcwd())
-
-        if result.returncode != 0:
-            # We'll still try to proceed if a transcript file happens to exist (e.g., prior run),
-            # but otherwise report the error.
-            app.logger.error("make failed rc=%s stdout=%s stderr=%s",
-                             result.returncode, result.stdout, result.stderr)
-
-        video_id = extract_video_id(video_url)
-        if not video_id:
-            return jsonify({'error': 'Could not extract video ID from URL'}), 400
-
-        transcript_file = f'transcripts/{video_id}.txt'
-        summary_file    = f'summaries/{video_id}.md'
-        html_file       = f'summaries/{video_id}.html'
-
-        # Load transcript (if produced)
-        raw_transcript = ""
-        if os.path.exists(transcript_file):
-            with open(transcript_file, 'r', encoding='utf-8') as f:
-                raw_transcript = f.read()
+        # Prepare request for Cloud Run worker
+        worker_data = {
+            'summary_format': summary_format,
+            'context_hints': context_hints
+        }
+        
+        if pasted_text:
+            worker_data['transcript_text'] = pasted_text
         else:
-            app.logger.warning("Transcript file missing: %s", transcript_file)
+            worker_data['url'] = video_url
 
-        # Clean "No text" noise etc.
-        cleaned_transcript = cleanup_transcript(raw_transcript)
+        # Call Cloud Run worker
+        import requests
+        response = requests.post(f"{worker_url}/summarize", json=worker_data, timeout=300)
+        
+        if response.status_code != 200:
+            return jsonify({
+                'error': f'Worker failed: {response.text}',
+                'status_code': response.status_code
+            }), 502
 
-        # Decide summary source:
-        # - Prefer Gemini if key present and we actually have text
-        # - Else fall back to file summary if it exists
-        # - Else baseline fallback
-        summary_content = ""
-        if os.getenv("GEMINI_API_KEY") and cleaned_transcript.strip():
-            app.logger.info("Using Gemini for summary (format=%s)", summary_format)
-            try:
-                summary_content = summarize_with_gemini(
-                    os.environ["GEMINI_API_KEY"], cleaned_transcript, summary_format
-                )
-            except Exception as e:
-                app.logger.exception("Gemini summarization failed; falling back. %s", e)
-                # try file summary or baseline
-                if os.path.exists(summary_file):
-                    with open(summary_file, 'r', encoding='utf-8') as f:
-                        summary_content = f.read().strip()
-                else:
-                    summary_content = baseline_summary(cleaned_transcript, summary_format)
-        else:
-            if os.path.exists(summary_file):
-                with open(summary_file, 'r', encoding='utf-8') as f:
-                    summary_content = f.read().strip()
-                if not summary_content:
-                    summary_content = baseline_summary(cleaned_transcript, summary_format)
-            else:
-                summary_content = baseline_summary(cleaned_transcript, summary_format)
+        worker_result = response.json()
+        
+        if not worker_result.get('success'):
+            return jsonify({
+                'error': worker_result.get('error', 'Worker processing failed')
+            }), 502
 
-        # Build download links if artifacts exist
-        links = []
-        if os.path.exists(html_file):
-            links.append(f'<a href="/download/{video_id}.html" target="_blank">📄 Download HTML</a>')
-        if os.path.exists(summary_file):
-            links.append(f'<a href="/download/{video_id}.md" target="_blank">📝 Download Markdown</a>')
-        if os.path.exists(transcript_file):
-            links.append(f'<a href="/download/{video_id}.txt" target="_blank">📄 Download Transcript</a>')
-        download_links = "".join(links)
-
-        # Render formatted content
-        formatted_content = f"""
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h3 style="color: #2c3e50; margin-bottom: 20px;">📝 Full Transcript</h3>
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; white-space: pre-wrap;">
-{cleaned_transcript}
-            </div>
-            <h3 style="color: #2c3e50; margin-bottom: 20px;">🎯 AI Summary ({summary_format.replace('_', ' ').title()})</h3>
-            <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #3498db; white-space: pre-wrap;">
-{summary_content}
-            </div>
-        </div>
-        """
+        # Format the response for the frontend
+        transcript_text = worker_result.get('transcript_text', '')
+        summary_md = worker_result.get('summary_md', '')
+        summary_html = worker_result.get('summary_html', '')
+        meta = worker_result.get('meta', {})
 
         return jsonify({
             'success': True,
-            'transcript': formatted_content,
-            'download_links': download_links,
+            'transcript': transcript_text,
+            'summary_md': summary_md,
+            'summary_html': summary_html,
+            'meta': meta,
             'message': 'Video processed successfully!'
         })
 
     except Exception as e:
-        app.logger.exception("Unhandled error in /process")
+        app.logger.exception("Unhandled error in /api/submit")
         return jsonify({'error': str(e)}), 500
+
+def handle_file_upload():
+    """Handle file uploads for subtitle files"""
+    try:
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        summary_format = request.form.get('summary_format', 'bullet_points')
+        context_hints = request.form.get('context_hints', '[]')
+        
+        try:
+            context_hints = json.loads(context_hints)
+        except:
+            context_hints = []
+        
+        # Read file content
+        file_content = file.read().decode('utf-8', errors='ignore')
+        
+        # Get Cloud Run worker URL
+        worker_url = os.getenv('WORKER_URL')
+        if not worker_url:
+            return jsonify({'error': 'WORKER_URL not configured'}), 500
+        
+        # Send to Cloud Run worker
+        import requests
+        worker_data = {
+            'transcript_text': file_content,
+            'summary_format': summary_format,
+            'context_hints': context_hints
+        }
+        
+        response = requests.post(f"{worker_url}/summarize", json=worker_data, timeout=300)
+        
+        if response.status_code != 200:
+            return jsonify({
+                'error': f'Worker failed: {response.text}',
+                'status_code': response.status_code
+            }), 502
+        
+        worker_result = response.json()
+        
+        if not worker_result.get('success'):
+            return jsonify({
+                'error': worker_result.get('error', 'Worker processing failed')
+            }), 502
+        
+        return jsonify({
+            'success': True,
+            'transcript': worker_result.get('transcript_text', ''),
+            'summary_md': worker_result.get('summary_md', ''),
+            'summary_html': worker_result.get('summary_html', ''),
+            'meta': worker_result.get('meta', {}),
+            'message': f'File {file.filename} processed successfully!'
+        })
+        
+    except Exception as e:
+        app.logger.exception("File upload failed")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/feedback', methods=['POST'])
+def submit_feedback():
+    """Handle user feedback submission"""
+    try:
+        data = request.get_json()
+        app.logger.info(f"Feedback received: {data}")
+        
+        # For now, just log the feedback
+        # In a production system, you'd save this to a database
+        feedback_data = {
+            'video_url': data.get('video_url', ''),
+            'summary_format': data.get('summary_format', ''),
+            'helpful': data.get('helpful', False),
+            'notes': data.get('notes', ''),
+            'meta': data.get('meta', {}),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        app.logger.info(f"Feedback data: {feedback_data}")
+        
+        return jsonify({'success': True, 'message': 'Feedback received'})
+        
+    except Exception as e:
+        app.logger.error(f"Feedback submission failed: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/download/<filename>')
 def download_file(filename):
