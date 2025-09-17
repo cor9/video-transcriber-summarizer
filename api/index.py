@@ -546,23 +546,35 @@ def index():
                 } else {
                     // Handle structured error responses
                     let errorMessage = data.error || 'An error occurred';
-                    if (data.suggestions) {
-                        errorMessage += '<br><br><strong>Suggestions:</strong><ul>';
+                    
+                    if (data.suggestions && data.suggestions.length > 0) {
+                        errorMessage += '<br><br><strong>💡 What you can try:</strong><ul>';
                         data.suggestions.forEach(suggestion => {
                             errorMessage += '<li>' + suggestion + '</li>';
                         });
                         errorMessage += '</ul>';
                     }
+                    
+                    if (data.common_causes && data.common_causes.length > 0) {
+                        errorMessage += '<br><strong>🔍 Common reasons:</strong><ul>';
+                        data.common_causes.forEach(cause => {
+                            errorMessage += '<li>' + cause + '</li>';
+                        });
+                        errorMessage += '</ul>';
+                    }
+                    
                     if (data.fixes) {
-                        errorMessage += '<br><strong>Fixes:</strong><ul>';
+                        errorMessage += '<br><strong>🔧 Fixes:</strong><ul>';
                         data.fixes.forEach(fix => {
                             errorMessage += '<li>' + fix + '</li>';
-                            });
-                            errorMessage += '</ul>';
-                        }
+                        });
+                        errorMessage += '</ul>';
+                    }
+                    
                     if (data.why) {
                         errorMessage += '<br><strong>Why:</strong> ' + data.why;
                     }
+                    
                     throw new Error(errorMessage);
                 }
             } catch (error) {
@@ -822,11 +834,12 @@ def process_video():
                     'success': False,
                     'error': enhanced_result['error'],
                     'metadata': enhanced_result.get('metadata', {}),
-                    'suggestions': [
+                    'suggestions': enhanced_result.get('suggestions', [
                         'Try the regular transcript mode (uncheck enhanced mode)',
                         'Switch to Paste mode if you have the transcript',
                         'Upload an SRT/VTT file using the file upload option'
-                    ]
+                    ]),
+                    'common_causes': enhanced_result.get('common_causes', [])
                 }), 400
             text = enhanced_result['text']
             diag = enhanced_result.get('metadata', {})

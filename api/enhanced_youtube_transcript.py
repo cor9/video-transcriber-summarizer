@@ -199,25 +199,74 @@ class EnhancedYouTubeTranscript:
             
         except TooManyRequests:
             return {
-                "error": "Rate limited by YouTube",
+                "error": "YouTube is temporarily rate-limiting our requests. Please try again in a few minutes.",
                 "retry_after": 60,
-                "metadata": {"error_type": "rate_limited"}
+                "metadata": {"error_type": "rate_limited"},
+                "suggestions": [
+                    "Wait a few minutes and try again",
+                    "Switch to 'Paste Transcript' mode if you have the transcript",
+                    "Upload an SRT/VTT file using the file upload option"
+                ]
             }
         except (NoTranscriptFound, TranscriptsDisabled):
             return {
-                "error": "No transcript available for this video",
-                "metadata": {"error_type": "no_transcript"}
+                "error": "This video doesn't have captions or subtitles available.",
+                "metadata": {"error_type": "no_transcript"},
+                "suggestions": [
+                    "Check if the video has captions enabled (look for CC button)",
+                    "Try a different video that has captions",
+                    "Use 'Paste Transcript' mode if you have the transcript text",
+                    "Upload an SRT/VTT file if you have subtitle files"
+                ],
+                "common_causes": [
+                    "Video creator disabled captions",
+                    "Video is too new (captions may not be processed yet)",
+                    "Video is age-restricted or private",
+                    "Video is in a language without auto-generated captions"
+                ]
             }
         except VideoUnavailable:
             return {
-                "error": "Video is unavailable or private",
-                "metadata": {"error_type": "video_unavailable"}
+                "error": "This video is unavailable, private, or has been removed.",
+                "metadata": {"error_type": "video_unavailable"},
+                "suggestions": [
+                    "Check if the video URL is correct",
+                    "Try a different video",
+                    "Use 'Paste Transcript' mode if you have the transcript"
+                ]
             }
         except Exception as e:
-            return {
-                "error": f"Failed to fetch transcript: {str(e)}",
-                "metadata": {"error_type": "unknown", "details": str(e)}
-            }
+            error_msg = str(e)
+            # Provide more specific error messages for common issues
+            if "Subtitles are disabled" in error_msg:
+                return {
+                    "error": "Captions are disabled for this video by the creator.",
+                    "metadata": {"error_type": "subtitles_disabled"},
+                    "suggestions": [
+                        "Try a different video with captions enabled",
+                        "Use 'Paste Transcript' mode if you have the transcript",
+                        "Upload an SRT/VTT file if you have subtitle files"
+                    ]
+                }
+            elif "Video unavailable" in error_msg:
+                return {
+                    "error": "This video is unavailable or has been removed.",
+                    "metadata": {"error_type": "video_unavailable"},
+                    "suggestions": [
+                        "Check if the video URL is correct",
+                        "Try a different video"
+                    ]
+                }
+            else:
+                return {
+                    "error": f"Unable to get transcript: {error_msg}",
+                    "metadata": {"error_type": "unknown", "details": error_msg},
+                    "suggestions": [
+                        "Try a different video",
+                        "Use 'Paste Transcript' mode if you have the transcript",
+                        "Upload an SRT/VTT file if you have subtitle files"
+                    ]
+                }
     
     def get_full_transcript(self, video_id: str, language: str = "en") -> Dict[str, Any]:
         """
