@@ -32,9 +32,6 @@
   "env": {
     "PYTHON_VERSION": "3.9"
   },
-  "analytics": {
-    "enabled": true
-  },
   "github": {
     "autoAlias": true,
     "autoJobCancelation": true
