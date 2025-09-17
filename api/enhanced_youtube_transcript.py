@@ -257,6 +257,24 @@ class EnhancedYouTubeTranscript:
                         "Try a different video"
                     ]
                 }
+            elif "no element found" in error_msg or "XML" in error_msg:
+                return {
+                    "error": "YouTube is temporarily blocking transcript access for this video.",
+                    "metadata": {"error_type": "xml_parse_error", "details": error_msg},
+                    "suggestions": [
+                        "This video has captions, but YouTube is blocking API access",
+                        "Try again in a few minutes (temporary blocking)",
+                        "Use 'Paste Transcript' mode if you can copy the captions from YouTube",
+                        "Upload an SRT/VTT file if you have subtitle files",
+                        "Try a different video with similar content"
+                    ],
+                    "common_causes": [
+                        "YouTube rate limiting or bot detection",
+                        "Temporary API access restrictions",
+                        "Video has captions but API access is blocked",
+                        "Regional restrictions on transcript access"
+                    ]
+                }
             else:
                 return {
                     "error": f"Unable to get transcript: {error_msg}",

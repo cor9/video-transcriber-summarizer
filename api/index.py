@@ -357,7 +357,8 @@ def index():
                     <label for="videoUrl">YouTube URL</label>
                     <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." >
                     <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
-                        Supported: YouTube links with captions (fast & free). Or switch to Paste Transcript for anything else.
+                        Supported: YouTube links with captions (fast & free). Or switch to Paste Transcript for anything else.<br>
+                        <strong>Note:</strong> If you see CC on TV but get an error, YouTube may be blocking API access. Try Paste mode instead.
                     </small>
                 </div>
 
