@@ -61,6 +61,10 @@ def get_transcript_simple(video_id):
                 return transcript_text
                 
             except Exception as e:
+                error_msg = str(e)
+                # If we get XML parsing errors, YouTube is blocking access
+                if "no element found" in error_msg or "XML" in error_msg:
+                    raise Exception("YouTube is currently blocking transcript access. This is a temporary issue on YouTube's side. Please try again in a few minutes, or try a different video.")
                 # If this source fails, try the next one
                 continue
         
@@ -69,7 +73,7 @@ def get_transcript_simple(video_id):
             continue
     
     # If all attempts failed, provide helpful error message
-    raise Exception("This video has no captions or auto-generated transcripts available. Try a different video that has spoken content.")
+    raise Exception("YouTube is currently blocking transcript access. This is a temporary issue on YouTube's side. Please try again in a few minutes, or try a different video. Most videos have transcripts, but YouTube is temporarily restricting API access.")
 
 # Configuration for the dedicated MCP server
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server-8vu8ryqm0-cor9s-projects.vercel.app")
