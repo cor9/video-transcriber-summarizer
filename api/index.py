@@ -3,9 +3,9 @@ from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
-from .captions import get_captions
-from .limiter import fetch_slot
-from .enhanced_youtube_transcript import get_enhanced_transcript, get_transcript_chunked, get_video_info
+from captions import get_captions
+from limiter import fetch_slot
+from enhanced_youtube_transcript import get_enhanced_transcript, get_transcript_chunked, get_video_info
 
 # Decode cookies at cold start for YouTube bot avoidance
 COOKIES_B64 = os.getenv("YT_COOKIES_B64", "")

@@ -14,8 +14,8 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound,
     CouldNotRetrieveTranscript, VideoUnavailable, TooManyRequests
 )
-from .backoff import backoff
-from .cache import cache_get, cache_set
+from backoff import backoff
+from cache import cache_get, cache_set
 
 
 class EnhancedYouTubeTranscript:

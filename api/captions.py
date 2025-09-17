@@ -4,8 +4,8 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound,
     CouldNotRetrieveTranscript, VideoUnavailable, TooManyRequests
 )
-from .backoff import backoff
-from .cache import cache_get, cache_set
+from backoff import backoff
+from cache import cache_get, cache_set
 
 COOKIES_TXT_PATH = "/tmp/youtube_cookies.txt"   # we'll write here at cold start if provided
 USE_YTDLP = os.getenv("ENABLE_YTDLP_FALLBACK", "1") == "1"
