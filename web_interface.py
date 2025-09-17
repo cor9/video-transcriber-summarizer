@@ -32,36 +32,44 @@ def get_video_id(url):
     return None # Return None if no ID is found
 
 def get_transcript_simple(video_id):
-    """Get transcript using YouTube's transcript API with enhanced error handling"""
+    """Get transcript using YouTube's transcript API with comprehensive fallback strategy"""
     max_retries = 3
     
+    # List of transcript sources to try in order
+    transcript_sources = [
+        None,  # Try any available transcript first
+        ['en'],  # Try English auto-generated
+        ['en-US'],  # Try US English
+        ['en-GB'],  # Try British English
+    ]
+    
     for attempt in range(max_retries):
-        try:
-            # Add delay between attempts
-            if attempt > 0:
-                delay = random.uniform(1, 3)
-                time.sleep(delay)
-            
-            # Get transcript
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            transcript_text = " ".join([item['text'] for item in transcript_list])
-            return transcript_text
-            
-        except Exception as e:
-            error_msg = str(e)
-            if attempt == max_retries - 1:
-                # Provide better error messages
-                if "no element found" in error_msg or "XML" in error_msg:
-                    raise Exception("YouTube is temporarily blocking transcript access for this video. This video has captions, but YouTube is blocking API access. Try again in a few minutes or use a different video.")
-                elif "Subtitles are disabled" in error_msg:
-                    raise Exception("Captions are disabled for this video by the creator. Try a different video with captions enabled.")
-                elif "Video unavailable" in error_msg:
-                    raise Exception("This video is unavailable or has been removed. Check if the video URL is correct.")
+        for source in transcript_sources:
+            try:
+                # Add delay between attempts
+                if attempt > 0:
+                    delay = random.uniform(1, 3)
+                    time.sleep(delay)
+                
+                # Try to get transcript from this source
+                if source:
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=source)
                 else:
-                    raise Exception(f"Could not get transcript: {error_msg}")
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                
+                transcript_text = " ".join([item['text'] for item in transcript_list])
+                return transcript_text
+                
+            except Exception as e:
+                # If this source fails, try the next one
+                continue
+        
+        # If all sources failed on this attempt, continue to next retry
+        if attempt < max_retries - 1:
             continue
     
-    return None
+    # If all attempts failed, provide helpful error message
+    raise Exception("This video has no captions or auto-generated transcripts available. Try a different video that has spoken content.")
 
 # Configuration for the dedicated MCP server
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server-8vu8ryqm0-cor9s-projects.vercel.app")
