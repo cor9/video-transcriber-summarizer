@@ -5,7 +5,8 @@ A simple, self-contained YouTube summarizer using Flask and the Gemini API.
 import os
 import time
 import random
-from flask import Flask, request, render_template_string
+import json
+from flask import Flask, request, render_template_string, jsonify
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
@@ -61,6 +62,67 @@ def get_transcript_simple(video_id):
     
     return None
 
+def get_transcript_mcp_style(video_id, language_codes=None):
+    """
+    Get transcript in MCP server style with enhanced functionality
+    Replicates the functionality of jkawamoto/mcp-youtube-transcript
+    """
+    try:
+        if language_codes:
+            # Try specific languages first
+            for lang in language_codes:
+                try:
+                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang])
+                    return {
+                        "success": True,
+                        "transcript": transcript_list,
+                        "language": lang,
+                        "text": " ".join([item['text'] for item in transcript_list])
+                    }
+                except:
+                    continue
+        
+        # Fallback to auto-generated or any available
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        return {
+            "success": True,
+            "transcript": transcript_list,
+            "language": "auto",
+            "text": " ".join([item['text'] for item in transcript_list])
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_type": "transcript_error"
+        }
+
+def get_video_info_mcp_style(video_id):
+    """
+    Get video information in MCP server style
+    """
+    try:
+        # Get transcript to verify video exists and get basic info
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        return {
+            "success": True,
+            "video_id": video_id,
+            "has_transcript": True,
+            "transcript_length": len(transcript_list),
+            "duration": transcript_list[-1]['start'] + transcript_list[-1]['duration'] if transcript_list else 0
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "video_id": video_id,
+            "has_transcript": False
+        }
+
 # Configure the Gemini API
 # IMPORTANT: You must set this environment variable in your terminal
 # before running the script. Example:
@@ -99,9 +161,18 @@ HTML_FORM = """
 <body>
     <h1>Simple YouTube Summarizer</h1>
     <p style="color: #666; margin-bottom: 20px;">Gets transcripts directly from YouTube and summarizes with AI</p>
-    <form action="/summarize" method="post">
+    <form action="/summarize" method="post" id="mainForm">
         <label for="youtube_url">Enter YouTube Video URL:</label>
         <input type="url" id="youtube_url" name="youtube_url" required placeholder="https://www.youtube.com/watch?v=...">
+        <div style="margin: 10px 0;">
+            <label>
+                <input type="checkbox" id="useMcpMode" name="use_mcp_mode" style="margin-right: 8px;">
+                🚀 Use MCP Server Mode (Enhanced YouTube Transcript API)
+            </label>
+            <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                Uses the same functionality as the jkawamoto/mcp-youtube-transcript server with better error handling and language support.
+            </small>
+        </div>
         <button type="submit">Summarize</button>
     </form>
     {% if error %}
@@ -147,6 +218,7 @@ def index():
 @app.route('/summarize', methods=['POST'])
 def summarize():
     youtube_url = request.form['youtube_url']
+    use_mcp_mode = request.form.get('use_mcp_mode') == 'on'
 
     # --- Step 1: Get the transcript ---
     try:
@@ -155,8 +227,16 @@ def summarize():
         if not video_id:
             return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
-        # Get transcript using YouTube's API
-        transcript_text = get_transcript_simple(video_id)
+        # Get transcript using either simple or MCP-style method
+        if use_mcp_mode:
+            # Use MCP-style transcript fetching
+            result = get_transcript_mcp_style(video_id, ["en"])
+            if not result["success"]:
+                return render_template_string(HTML_FORM, error=f"MCP Error: {result['error']}")
+            transcript_text = result["text"]
+        else:
+            # Use simple transcript fetching
+            transcript_text = get_transcript_simple(video_id)
         
     except Exception as e:
         # Handle errors
@@ -179,6 +259,58 @@ def summarize():
 
     # Display the results
     return render_template_string(HTML_RESULT, summary=summary_text, transcript=transcript_text)
+
+# MCP Server Style API Endpoints
+@app.route("/api/mcp/youtube/transcript", methods=["POST"])
+def mcp_get_transcript():
+    """MCP-style transcript endpoint"""
+    try:
+        data = request.get_json()
+        video_url = data.get("video_url")
+        language_codes = data.get("language_codes", ["en"])
+        
+        video_id = get_video_id(video_url)
+        if not video_id:
+            return jsonify({
+                "success": False,
+                "error": "Invalid YouTube URL",
+                "error_type": "invalid_url"
+            })
+        
+        result = get_transcript_mcp_style(video_id, language_codes)
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "error_type": "server_error"
+        })
+
+@app.route("/api/mcp/youtube/info", methods=["POST"])
+def mcp_get_video_info():
+    """MCP-style video info endpoint"""
+    try:
+        data = request.get_json()
+        video_url = data.get("video_url")
+        
+        video_id = get_video_id(video_url)
+        if not video_id:
+            return jsonify({
+                "success": False,
+                "error": "Invalid YouTube URL",
+                "error_type": "invalid_url"
+            })
+        
+        result = get_video_info_mcp_style(video_id)
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "error_type": "server_error"
+        })
 
 # --- 4. RUN THE APP ---
 if __name__ == '__main__':
