@@ -70,6 +70,26 @@
 **Decision:** Implemented comprehensive video accessibility checking before processing, added specific error handling for different failure types (private videos, no captions, bot blocking), enhanced user guidance with targeted suggestions, created video accessibility validation function, improved error messages and fallback strategies
 **Status:** Success
 
+## 2025-01-12
+**Issue:** User requested integration of jkawamoto/mcp-youtube-transcript MCP server functionality into web app
+**Decision:** Created enhanced_youtube_transcript.py module with pagination support, added new API endpoints (/api/youtube/transcript, /api/youtube/info), integrated enhanced mode checkbox in web interface, added yt-dlp dependency for better fallback support, maintained backward compatibility with existing transcript system
+**Status:** Success
+
+## 2025-01-12
+**Issue:** User requested Vercel Analytics integration for tracking user interactions
+**Decision:** Added Vercel Analytics script to HTML template, implemented custom event tracking (transcription_started, transcription_completed, transcription_error, mode_changed), updated vercel.json configuration, created analytics test page and comprehensive documentation, maintained privacy by truncating error messages
+**Status:** Success
+
+## 2025-01-12
+**Issue:** Vercel build failures due to invalid schema and incompatible dependencies
+**Decision:** Removed invalid 'analytics' property from vercel.json, updated yt-dlp from 2024.1.7 to 2022.10.4 for Vercel compatibility, resolved schema validation errors while maintaining all functionality
+**Status:** Success
+
+## 2025-01-12
+**Issue:** Poor error handling for videos without transcripts causing user confusion
+**Decision:** Enhanced error handling with detailed user-friendly messages, added specific suggestions for different error types (subtitles_disabled, rate_limited, video_unavailable), implemented structured error responses with actionable guidance, improved frontend error display with emojis and better formatting
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 
