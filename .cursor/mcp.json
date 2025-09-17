@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "youtube-transcript": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/jkawamoto/mcp-youtube-transcript", "mcp-youtube-transcript", "--response-limit", "15000"]
+    }
+  }
+}

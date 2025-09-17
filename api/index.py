@@ -5,6 +5,7 @@ import google.generativeai as genai
 from urllib.parse import urlparse, parse_qs, quote
 from .captions import get_captions
 from .limiter import fetch_slot
+from .enhanced_youtube_transcript import get_enhanced_transcript, get_transcript_chunked, get_video_info
 
 # Decode cookies at cold start for YouTube bot avoidance
 COOKIES_B64 = os.getenv("YT_COOKIES_B64", "")
@@ -381,6 +382,16 @@ def index():
                     </select>
                 </div>
 
+                <div class="form-group" id="enhancedGroup" style="display:none;">
+                    <label>
+                        <input type="checkbox" id="useEnhanced" name="useEnhanced" style="margin-right: 8px;">
+                        🚀 Enhanced Transcript Mode (Better for long videos)
+                    </label>
+                    <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                        Uses advanced pagination and better error handling for longer videos. May be slower but more reliable.
+                    </small>
+                </div>
+
                 <button type="submit" class="submit-btn" id="submitBtn">🚀 Process</button>
             </form>
 
@@ -402,12 +413,15 @@ def index():
         const urlGroup = document.getElementById('urlGroup');
         const pasteGroup = document.getElementById('pasteGroup');
         const uploadGroup = document.getElementById('uploadGroup');
+        const enhancedGroup = document.getElementById('enhancedGroup');
+        
         document.querySelectorAll('input[name="mode"]').forEach(r => {
             r.addEventListener('change', () => {
                 const mode = document.querySelector('input[name="mode"]:checked').value;
                 urlGroup.style.display = mode === 'youtube' ? 'block' : 'none';
                 pasteGroup.style.display = mode === 'paste' ? 'block' : 'none';
                 uploadGroup.style.display = mode === 'upload' ? 'block' : 'none';
+                enhancedGroup.style.display = mode === 'youtube' ? 'block' : 'none';
             });
         });
 
@@ -421,6 +435,7 @@ def index():
             const mode = document.querySelector('input[name="mode"]:checked').value;
             const rawTranscript = document.getElementById('rawTranscript')?.value || '';
             const subtitleFile = document.getElementById('subtitleFile')?.files[0];
+            const useEnhanced = document.getElementById('useEnhanced')?.checked || false;
             
             // Show loading state
             document.getElementById('submitBtn').disabled = true;
@@ -454,7 +469,8 @@ def index():
                             mode,
                             video_url: videoUrl,
                             raw_transcript: rawTranscript,
-                            summary_format: summaryFormat
+                            summary_format: summaryFormat,
+                            use_enhanced: useEnhanced
                         })
                     });
                 } else {
@@ -468,7 +484,8 @@ def index():
                             mode,
                         video_url: videoUrl,
                             raw_transcript: rawTranscript,
-                            summary_format: summaryFormat
+                            summary_format: summaryFormat,
+                            use_enhanced: useEnhanced
                     })
                 });
                 }
@@ -549,6 +566,73 @@ def health():
         return jsonify(detail | {"status": "gemini_ok", "sample": txt, "rt": round(time.time() - t0, 2)}), 200
     except Exception as e:
         return jsonify(detail | {"status": "gemini_error", "error": str(e)}), 500
+
+@app.route('/api/youtube/transcript', methods=['POST'])
+def get_youtube_transcript():
+    """Enhanced YouTube transcript endpoint with pagination support"""
+    try:
+        data = request.get_json(force=True) or {}
+        url = data.get('url', '').strip()
+        language = data.get('language', 'en')
+        next_cursor = data.get('next_cursor')
+        
+        if not url:
+            return jsonify({'success': False, 'error': 'URL is required'}), 400
+        
+        if not is_youtube_url(url):
+            return jsonify({'success': False, 'error': 'Invalid YouTube URL'}), 400
+        
+        # Use enhanced transcript fetcher
+        if next_cursor:
+            # Get next chunk
+            result = get_transcript_chunked(url, language, next_cursor)
+        else:
+            # Get full transcript
+            result = get_enhanced_transcript(url, language)
+        
+        if 'error' in result:
+            return jsonify({
+                'success': False, 
+                'error': result['error'],
+                'metadata': result.get('metadata', {})
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/youtube/info', methods=['POST'])
+def get_youtube_video_info():
+    """Get YouTube video information"""
+    try:
+        data = request.get_json(force=True) or {}
+        url = data.get('url', '').strip()
+        
+        if not url:
+            return jsonify({'success': False, 'error': 'URL is required'}), 400
+        
+        if not is_youtube_url(url):
+            return jsonify({'success': False, 'error': 'Invalid YouTube URL'}), 400
+        
+        info = get_video_info(url)
+        
+        if 'error' in info:
+            return jsonify({
+                'success': False, 
+                'error': info['error']
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'data': info
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/upload_subs', methods=['POST'])
 def upload_subs():
@@ -685,9 +769,30 @@ def process_video():
         if not is_youtube_url(video_url):
             return jsonify({'success': False, 'error': 'Use a YouTube link or switch to Paste mode.'}), 400
 
-        # Use resilient caption fetcher with cache + backoff + concurrency gate
-        with fetch_slot():
-            text, diag = get_captions(video_url)
+        # Check if user wants enhanced transcript functionality
+        use_enhanced = data.get('use_enhanced', False)
+        
+        if use_enhanced:
+            # Use enhanced transcript fetcher with pagination support
+            enhanced_result = get_enhanced_transcript(video_url)
+            if 'error' in enhanced_result:
+                return jsonify({
+                    'success': False,
+                    'error': enhanced_result['error'],
+                    'metadata': enhanced_result.get('metadata', {}),
+                    'suggestions': [
+                        'Try the regular transcript mode (uncheck enhanced mode)',
+                        'Switch to Paste mode if you have the transcript',
+                        'Upload an SRT/VTT file using the file upload option'
+                    ]
+                }), 400
+            text = enhanced_result['text']
+            diag = enhanced_result.get('metadata', {})
+        else:
+            # Use resilient caption fetcher with cache + backoff + concurrency gate
+            with fetch_slot():
+                text, diag = get_captions(video_url)
+        
         if not text:
             # Determine appropriate error response based on diagnostics
             if diag.get("reason") == "rate_limited_or_blocked":
