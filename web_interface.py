@@ -64,7 +64,7 @@ def get_transcript_simple(video_id):
     return None
 
 # Configuration for the dedicated MCP server
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server.vercel.app")
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server-41sb8rc11-cor9s-projects.vercel.app")
 
 def get_transcript_from_mcp_server(video_url, language_codes=None):
     """
