@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vercel Analytics Test - VidScribe2AI</title>
+    <script>
+      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .info { background: #d1ecf1; color: #0c5460; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Vercel Analytics Test Page</h1>
+    <p>This page tests Vercel Analytics integration for VidScribe2AI.</p>
+
+    <div class="test-section">
+        <h3>Analytics Status</h3>
+        <div id="analytics-status" class="status info">Checking analytics status...</div>
+        <button onclick="checkAnalytics()">Check Analytics</button>
+    </div>
+
+    <div class="test-section">
+        <h3>Event Tracking Tests</h3>
+        <button onclick="trackTestEvent()">Track Test Event</button>
+        <button onclick="trackPageView()">Track Page View</button>
+        <button onclick="trackCustomEvent()">Track Custom Event</button>
+        <div id="event-status" class="status info">Ready to track events...</div>
+    </div>
+
+    <div class="test-section">
+        <h3>User Interaction Tests</h3>
+        <button onclick="simulateTranscription()">Simulate Transcription</button>
+        <button onclick="simulateModeChange()">Simulate Mode Change</button>
+        <button onclick="simulateError()">Simulate Error</button>
+        <div id="interaction-status" class="status info">Ready for interactions...</div>
+    </div>
+
+    <div class="test-section">
+        <h3>Instructions</h3>
+        <ol>
+            <li>Click "Check Analytics" to verify Vercel Analytics is loaded</li>
+            <li>Click the event tracking buttons to test custom events</li>
+            <li>Click the interaction buttons to simulate app usage</li>
+            <li>Check your Vercel dashboard for analytics data (may take 30 seconds)</li>
+        </ol>
+    </div>
+
+    <script>
+        function checkAnalytics() {
+            const status = document.getElementById('analytics-status');
+            if (window.va) {
+                status.innerHTML = '✅ Vercel Analytics is loaded and ready!';
+                status.className = 'status success';
+            } else {
+                status.innerHTML = '❌ Vercel Analytics not loaded';
+                status.className = 'status info';
+            }
+        }
+
+        function trackTestEvent() {
+            if (window.va) {
+                window.va('track', 'test_event', { 
+                    timestamp: new Date().toISOString(),
+                    page: 'analytics_test'
+                });
+                document.getElementById('event-status').innerHTML = '✅ Test event tracked!';
+                document.getElementById('event-status').className = 'status success';
+            }
+        }
+
+        function trackPageView() {
+            if (window.va) {
+                window.va('track', 'page_view', { 
+                    page: 'analytics_test',
+                    referrer: document.referrer
+                });
+                document.getElementById('event-status').innerHTML = '✅ Page view tracked!';
+                document.getElementById('event-status').className = 'status success';
+            }
+        }
+
+        function trackCustomEvent() {
+            if (window.va) {
+                window.va('track', 'custom_event', { 
+                    event_type: 'button_click',
+                    button_name: 'custom_event',
+                    user_agent: navigator.userAgent.substring(0, 50)
+                });
+                document.getElementById('event-status').innerHTML = '✅ Custom event tracked!';
+                document.getElementById('event-status').className = 'status success';
+            }
+        }
+
+        function simulateTranscription() {
+            if (window.va) {
+                window.va('track', 'transcription_started', {
+                    mode: 'youtube',
+                    summary_format: 'bullet_points',
+                    use_enhanced: true,
+                    has_url: true
+                });
+                
+                // Simulate completion after 2 seconds
+                setTimeout(() => {
+                    window.va('track', 'transcription_completed', {
+                        mode: 'youtube',
+                        summary_format: 'bullet_points',
+                        use_enhanced: true,
+                        generation_ms: 2000,
+                        model: 'gemini-1.5-flash'
+                    });
+                    document.getElementById('interaction-status').innerHTML = '✅ Simulated transcription completed!';
+                    document.getElementById('interaction-status').className = 'status success';
+                }, 2000);
+                
+                document.getElementById('interaction-status').innerHTML = '🔄 Simulating transcription...';
+                document.getElementById('interaction-status').className = 'status info';
+            }
+        }
+
+        function simulateModeChange() {
+            if (window.va) {
+                const modes = ['youtube', 'paste', 'upload'];
+                const randomMode = modes[Math.floor(Math.random() * modes.length)];
+                window.va('track', 'mode_changed', { mode: randomMode });
+                document.getElementById('interaction-status').innerHTML = `✅ Simulated mode change to: ${randomMode}`;
+                document.getElementById('interaction-status').className = 'status success';
+            }
+        }
+
+        function simulateError() {
+            if (window.va) {
+                window.va('track', 'transcription_error', {
+                    mode: 'youtube',
+                    summary_format: 'bullet_points',
+                    use_enhanced: false,
+                    error_message: 'Simulated test error'
+                });
+                document.getElementById('interaction-status').innerHTML = '✅ Simulated error tracked!';
+                document.getElementById('interaction-status').className = 'status success';
+            }
+        }
+
+        // Auto-check analytics on page load
+        window.addEventListener('load', () => {
+            setTimeout(checkAnalytics, 1000);
+        });
+    </script>
+</body>
+</html>

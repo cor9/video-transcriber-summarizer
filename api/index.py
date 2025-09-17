@@ -180,6 +180,10 @@ def index():
     <title>VidScribe2AI - YouTube Caption Transcription & Summarization</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="icon" type="image/svg+xml" href="/sitelogo.svg">
+    <script>
+      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
     <style>
         * {
             margin: 0;
@@ -422,6 +426,11 @@ def index():
                 pasteGroup.style.display = mode === 'paste' ? 'block' : 'none';
                 uploadGroup.style.display = mode === 'upload' ? 'block' : 'none';
                 enhancedGroup.style.display = mode === 'youtube' ? 'block' : 'none';
+                
+                // Track mode change
+                if (window.va) {
+                    window.va('track', 'mode_changed', { mode: mode });
+                }
             });
         });
 
@@ -436,6 +445,18 @@ def index():
             const rawTranscript = document.getElementById('rawTranscript')?.value || '';
             const subtitleFile = document.getElementById('subtitleFile')?.files[0];
             const useEnhanced = document.getElementById('useEnhanced')?.checked || false;
+            
+            // Track analytics event
+            if (window.va) {
+                window.va('track', 'transcription_started', {
+                    mode: mode,
+                    summary_format: summaryFormat,
+                    use_enhanced: useEnhanced,
+                    has_url: !!videoUrl,
+                    has_transcript: !!rawTranscript,
+                    has_file: !!subtitleFile
+                });
+            }
             
             // Show loading state
             document.getElementById('submitBtn').disabled = true;
@@ -504,6 +525,17 @@ def index():
                     const genMs = data?.metrics?.generation_ms || 0;
                     await new Promise(r => setTimeout(r, Math.max(0, 900 - genMs)));
                     
+                    // Track successful completion
+                    if (window.va) {
+                        window.va('track', 'transcription_completed', {
+                            mode: mode,
+                            summary_format: summaryFormat,
+                            use_enhanced: useEnhanced,
+                            generation_ms: genMs,
+                            model: data?.metrics?.model || 'unknown'
+                        });
+                    }
+                    
                     // Show results
                     document.getElementById('transcriptContent').innerHTML = data.transcript;
                     // Add download links if available
@@ -534,6 +566,16 @@ def index():
                     throw new Error(errorMessage);
                 }
             } catch (error) {
+                // Track error
+                if (window.va) {
+                    window.va('track', 'transcription_error', {
+                        mode: mode,
+                        summary_format: summaryFormat,
+                        use_enhanced: useEnhanced,
+                        error_message: error.message.substring(0, 100) // Truncate for privacy
+                    });
+                }
+                
                 document.getElementById('error').innerHTML = 'Error: ' + error.message;
                 document.getElementById('error').style.display = 'block';
             } finally {
