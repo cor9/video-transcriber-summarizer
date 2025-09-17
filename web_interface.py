@@ -64,7 +64,7 @@ def get_transcript_simple(video_id):
     return None
 
 # Configuration for the dedicated MCP server
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server-41sb8rc11-cor9s-projects.vercel.app")
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server-8vu8ryqm0-cor9s-projects.vercel.app")
 
 def get_transcript_from_mcp_server(video_url, language_codes=None):
     """
@@ -214,11 +214,8 @@ def summarize():
         if not video_id:
             return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
-        # Use dedicated MCP server by default
-        result = get_transcript_from_mcp_server(youtube_url, ["en"])
-        if not result["success"]:
-            return render_template_string(HTML_FORM, error=f"Could not get transcript: {result['error']}")
-        transcript_text = result["text"]
+        # Use enhanced transcript fetching with better error handling
+        transcript_text = get_transcript_simple(video_id)
         
     except Exception as e:
         # Handle errors
