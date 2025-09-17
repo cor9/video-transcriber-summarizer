@@ -6,6 +6,7 @@ import os
 import time
 import random
 import json
+import requests
 from flask import Flask, request, render_template_string, jsonify
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -61,6 +62,62 @@ def get_transcript_simple(video_id):
             continue
     
     return None
+
+# Configuration for the dedicated MCP server
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-youtube-transcript-server.vercel.app")
+
+def get_transcript_from_mcp_server(video_url, language_codes=None):
+    """
+    Call the dedicated MCP transcript server
+    """
+    try:
+        payload = {
+            "video_url": video_url,
+            "language_codes": language_codes or ["en"]
+        }
+        
+        response = requests.post(
+            f"{MCP_SERVER_URL}/api/transcript",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "transcript": result.get("transcript"),
+                    "language": result.get("language"),
+                    "text": result.get("text"),
+                    "cached": result.get("cached", False)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("error", "Unknown error from MCP server")
+                }
+        else:
+            return {
+                "success": False,
+                "error": f"MCP server returned status {response.status_code}: {response.text}"
+            }
+            
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "error": "MCP server request timed out. Please try again."
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "error": "Cannot connect to MCP server. Please check if the server is running."
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Error calling MCP server: {str(e)}"
+        }
 
 def get_transcript_mcp_style(video_id, language_codes=None):
     """
@@ -173,6 +230,15 @@ HTML_FORM = """
                 Uses the same functionality as the jkawamoto/mcp-youtube-transcript server with better error handling and language support.
             </small>
         </div>
+        <div style="margin: 10px 0;">
+            <label>
+                <input type="checkbox" id="useDedicatedServer" name="use_dedicated_server" style="margin-right: 8px;">
+                🌐 Use Dedicated Transcript Server (Recommended)
+            </label>
+            <small style="color:#666;font-size:.9em;display:block;margin-top:5px;">
+                Calls a separate, dedicated transcript server for better performance and reliability. Includes caching and enhanced error handling.
+            </small>
+        </div>
         <button type="submit">Summarize</button>
     </form>
     {% if error %}
@@ -219,6 +285,7 @@ def index():
 def summarize():
     youtube_url = request.form['youtube_url']
     use_mcp_mode = request.form.get('use_mcp_mode') == 'on'
+    use_dedicated_server = request.form.get('use_dedicated_server') == 'on'
 
     # --- Step 1: Get the transcript ---
     try:
@@ -227,9 +294,15 @@ def summarize():
         if not video_id:
             return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
         
-        # Get transcript using either simple or MCP-style method
-        if use_mcp_mode:
-            # Use MCP-style transcript fetching
+        # Get transcript using the selected method
+        if use_dedicated_server:
+            # Use dedicated MCP server
+            result = get_transcript_from_mcp_server(youtube_url, ["en"])
+            if not result["success"]:
+                return render_template_string(HTML_FORM, error=f"Dedicated Server Error: {result['error']}")
+            transcript_text = result["text"]
+        elif use_mcp_mode:
+            # Use MCP-style transcript fetching (local)
             result = get_transcript_mcp_style(video_id, ["en"])
             if not result["success"]:
                 return render_template_string(HTML_FORM, error=f"MCP Error: {result['error']}")
