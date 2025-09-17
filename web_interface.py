@@ -30,7 +30,7 @@ def get_video_id(url):
     return None # Return None if no ID is found
 
 def get_transcript_simple(video_id):
-    """Get transcript using YouTube's transcript API with retry logic"""
+    """Get transcript using YouTube's transcript API with enhanced error handling"""
     max_retries = 3
     
     for attempt in range(max_retries):
@@ -46,8 +46,17 @@ def get_transcript_simple(video_id):
             return transcript_text
             
         except Exception as e:
+            error_msg = str(e)
             if attempt == max_retries - 1:
-                raise Exception(f"Could not get transcript: {str(e)}")
+                # Provide better error messages
+                if "no element found" in error_msg or "XML" in error_msg:
+                    raise Exception("YouTube is temporarily blocking transcript access for this video. This video has captions, but YouTube is blocking API access. Try again in a few minutes or use a different video.")
+                elif "Subtitles are disabled" in error_msg:
+                    raise Exception("Captions are disabled for this video by the creator. Try a different video with captions enabled.")
+                elif "Video unavailable" in error_msg:
+                    raise Exception("This video is unavailable or has been removed. Check if the video URL is correct.")
+                else:
+                    raise Exception(f"Could not get transcript: {error_msg}")
             continue
     
     return None
@@ -73,6 +82,10 @@ HTML_FORM = """
 <head>
     <meta charset="UTF-8">
     <title>Simple YouTube Summarizer</title>
+    <script>
+      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f9f9f9; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
         h1 { color: #333; }

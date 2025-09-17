@@ -11,7 +11,7 @@
       "use": "@vercel/node"
     },
     {
-      "src": "api/index.py",
+      "src": "web_interface.py",
       "use": "@vercel/python"
     }
   ],
@@ -26,7 +26,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "web_interface.py"
     }
   ],
   "env": {
