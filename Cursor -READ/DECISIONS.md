@@ -90,6 +90,11 @@
 **Decision:** Enhanced error handling with detailed user-friendly messages, added specific suggestions for different error types (subtitles_disabled, rate_limited, video_unavailable), implemented structured error responses with actionable guidance, improved frontend error display with emojis and better formatting
 **Status:** Success
 
+## 2025-01-12
+**Issue:** YouTube API returning misleading "Subtitles are disabled" errors when transcripts exist but access is blocked
+**Decision:** Added XML parsing error detection and specific handling for YouTube blocking scenarios, created debug tool to diagnose caption availability, improved error messages to distinguish between actual disabled captions vs API access blocking, added UI guidance explaining CC vs API access differences
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 

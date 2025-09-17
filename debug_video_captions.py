@@ -92,5 +92,5 @@ def debug_video_captions(video_url):
     print("  • CC might be from a different source (broadcast, etc.)")
 
 if __name__ == "__main__":
-    test_url = "https://www.youtube.com/watch?v=GuTcle5edjk"
+    test_url = "https://www.youtube.com/watch?v=s9TzkYbliO8"
     debug_video_captions(test_url)
