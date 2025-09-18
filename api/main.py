@@ -27,7 +27,7 @@ MCP_API_KEY    = os.environ.get("MCP_API_KEY")
 MAX_TRANSCRIPT_CHARS = int(os.environ.get("MAX_TRANSCRIPT_CHARS", "160000"))
 CHUNK_CHARS           = int(os.environ.get("CHUNK_CHARS", "12000"))
 SUMMARY_BULLETS       = int(os.environ.get("SUMMARY_BULLETS", "8"))
-USE_STT               = (os.environ.get("USE_STT_FALLBACK", "false").lower() == "true")
+USE_STT               = (os.environ.get("USE_STT_FALLBACK", "true").lower() == "true")
 DEEPGRAM_API_KEY      = os.environ.get("DEEPGRAM_API_KEY")
 
 app = Flask(__name__)
