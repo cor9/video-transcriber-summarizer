@@ -1,19 +1,12 @@
 {
-  "version": 2,
-  "name": "simple-mcp-youtube-transcript",
-  "builds": [
-    {
-      "src": "simple_app.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60
     }
-  ],
+  },
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "simple_app.py"
-    }
-  ],
-  "env": {
-    "PYTHON_VERSION": "3.9"
-  }
+    { "src": "^/$", "dest": "/api/index.py" },
+    { "src": "^/summarize$", "dest": "/api/index.py" }
+  ]
 }
