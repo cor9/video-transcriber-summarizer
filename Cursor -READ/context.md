@@ -28,13 +28,15 @@ Goal: Transform any video/audio into structured summaries with AI-powered transc
 - [x] MCP server deployment issues (FIXED - local-first approach with fallback)
 - [x] Flask-CORS dependency missing (FIXED - added Flask-Cors==4.0.1)
 - [x] Vercel configuration conflicts (FIXED - proper functions format with bot protection)
+- [x] Vercel build runtime errors (FIXED - added "version": 2 to prevent legacy parser fallback)
+- [x] MCP server 401 authentication errors (FIXED - disabled Password Protection, re-enabled API key auth)
 
 ---
 
 # Current Implementation Context (2025-01-17)
 
 ## What's Actually Built
-- Flask application deployed on Vercel as serverless function (api/index.py)
+- Flask application deployed on Vercel as serverless function (api/main.py)
 - New Google Gen AI SDK (google-genai) with gemini-2.5-flash model
 - Chunked map-reduce summarization for long videos (160k char limit, 12k chunks)
 - Local-first YouTube transcript fetching with MCP server fallback
@@ -45,6 +47,8 @@ Goal: Transform any video/audio into structured summaries with AI-powered transc
 - Multiple language probing for transcripts (auto, en, en-US, en-GB)
 - Configurable environment variables for model, limits, and server URLs
 - Cursor MCP integration for development workflow
+- Modern Vercel configuration with "version": 2 and functions syntax
+- Pre-commit hook to prevent legacy Vercel config regressions
 
 ## Key Components Working
 - Main page loads successfully (200 OK) with Gemini model info display
@@ -71,6 +75,10 @@ Goal: Transform any video/audio into structured summaries with AI-powered transc
 - Implemented CORS with permissive origins for cross-origin requests
 - Added Cursor MCP integration for development workflow
 - Created comprehensive setup guide with usage examples and troubleshooting
+- Fixed Vercel build runtime errors by adding "version": 2 to prevent legacy parser fallback
+- Resolved MCP server 401 authentication errors by disabling Password Protection
+- Renamed api/index.py to api/main.py to break deployment cache issues
+- Added pre-commit hook to prevent legacy Vercel config regressions
 
 ## Architecture Decisions Made
 - ✅ **Local-First Transcript Fetching**: Prioritize youtube-transcript-api over external MCP servers for reliability
@@ -79,6 +87,9 @@ Goal: Transform any video/audio into structured summaries with AI-powered transc
 - ✅ **Bot Protection**: Add 204 routes for common bot requests to prevent unnecessary cold starts
 - ✅ **CORS Integration**: Enable cross-origin requests with permissive origins
 - ✅ **Development Workflow**: Integrate Cursor MCP for direct transcript fetching during development
+- ✅ **Modern Vercel Config**: Use "version": 2 with functions syntax to prevent legacy parser fallback
+- ✅ **API Key Authentication**: Implement x-api-key header authentication for MCP server fallback
+- ✅ **Prevention Measures**: Add pre-commit hooks to prevent legacy Vercel config regressions
 
 ## Future Considerations
 - Consider adding YouTube audio extraction service for better UX
@@ -103,3 +114,7 @@ Goal: Transform any video/audio into structured summaries with AI-powered transc
 - MCP server failures → solved by local-first transcript fetching approach
 - Deprecated SDK → solved by upgrading to google-genai
 - Bot requests causing cold starts → solved by 204 status routes
+- Vercel build runtime errors → solved by adding "version": 2 to prevent legacy parser fallback
+- MCP server 401 authentication → solved by disabling Password Protection and using API key auth
+- Deployment cache issues → solved by renaming files and clearing .vercel directories
+- Legacy config regressions → solved by pre-commit hooks and modern syntax enforcement

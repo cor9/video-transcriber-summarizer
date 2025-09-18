@@ -115,6 +115,16 @@
 **Decision:** Added .cursor/mcp.json configuration for jkawamoto/mcp-youtube-transcript server, installed uv package manager via pipx, created comprehensive setup guide with usage examples and troubleshooting, enabled direct transcript fetching in Cursor for development
 **Status:** Success
 
+## 2025-01-17
+**Issue:** Vercel build failing with "Function Runtimes must have a valid version" error
+**Decision:** Fixed vercel.json configuration by adding "version": 2 key to prevent fallback to legacy Now/builders parser, used modern "functions" syntax with "runtime": "python3.11", removed conflicting files (simple_mcp_server.py, mcp_server_vercel.json), renamed api/index.py to api/main.py to break deployment cache
+**Status:** Success
+
+## 2025-01-17
+**Issue:** MCP server 401 Authentication Required errors due to Vercel Password Protection
+**Decision:** Disabled Vercel Password Protection in dashboard, re-enabled MCP server fallback with API key authentication, implemented local-first approach with MCP server as authenticated fallback, added pre-commit hook to prevent legacy Vercel config regressions
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 
