@@ -212,15 +212,8 @@ def summarize():
     if not vid:
         return render_template_string(HTML_FORM.replace("{model}", GEMINI_MODEL), error="Invalid YouTube URL.")
 
-    # 1) Transcript (Local first → MCP fallback with API key)
+    # 1) Transcript (Local only - MCP server requires authentication)
     ok, transcript, source = local_transcript(vid)
-    if not ok:
-        # Try MCP server as fallback with API key authentication
-        ok, transcript, source = call_mcp_transcript(youtube_url)
-        if not ok:
-            # brief jittered retry
-            time.sleep(random.uniform(0.4, 1.2))
-            ok, transcript, source = call_mcp_transcript(youtube_url)
 
     if not ok or not transcript:
         return render_template_string(HTML_FORM.replace("{model}", GEMINI_MODEL), error=f"Could not get transcript: {source}")
