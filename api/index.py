@@ -2,6 +2,7 @@
 """
 A simple, self-contained YouTube summarizer using Flask and the Gemini API.
 This version calls a dedicated MCP server for transcripts.
+v3: Fixed Vercel deployment configuration - using api/index.py
 """
 import os, time, random, json, math, requests
 from flask import Flask, request, render_template_string
