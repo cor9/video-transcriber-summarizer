@@ -102,6 +102,17 @@ def test_transcript():
     
     return jsonify(result)
 
+@app.get("/diag")
+def diag():
+    """Diagnostic endpoint to check configuration"""
+    return jsonify({
+        "mcp_server_url": bool(os.environ.get("MCP_SERVER_URL")),
+        "mcp_api_key_set": bool(os.environ.get("MCP_API_KEY")),
+        "gemini_key_set": bool(os.environ.get("GEMINI_API_KEY")),
+        "deepgram_key_set": bool(os.environ.get("DEEPGRAM_API_KEY")),
+        "has_local_yt": HAS_YT
+    })
+
 def get_video_id(url: str):
     if not url: return None
     q = urlparse(url); host = (q.hostname or "").lower() if q.hostname else ""
@@ -136,50 +147,86 @@ def fetch_transcript_local(video_url: str):
     vid = get_video_id(video_url)
     if not vid:
         return False, None, "Invalid YouTube URL"
-    
-    # TEMPORARY WORKAROUND: Return mock transcript for testing
-    # TODO: Remove this when YouTube API is working again
-    if vid == "dQw4w9WgXcQ":  # Rick Roll video
-        mock_transcript = """
-        We're no strangers to love. You know the rules and so do I. 
-        A full commitment's what I'm thinking of. You wouldn't get this from any other guy. 
-        I just wanna tell you how I'm feeling. Gotta make you understand. 
-        Never gonna give you up. Never gonna let you down. Never gonna run around and desert you. 
-        Never gonna make you cry. Never gonna say goodbye. Never gonna tell a lie and hurt you.
-        """
-        return True, mock_transcript.strip(), "Mock transcript (API temporarily unavailable)"
-    
-    # Try different approaches with better error handling
-    probes = [None, ['en'], ['es'], ['fr'], ['de'], ['it'], ['pt']]
-    
-    for p in probes:
-        try:
-            lst = (YouTubeTranscriptApi.get_transcript(vid, languages=p) if p
-                   else YouTubeTranscriptApi.get_transcript(vid))
-            txt = " ".join(d.get("text","") for d in lst)
-            if txt.strip():  # Make sure we got actual content
-                return True, txt, f"Local API ({p or 'auto'})"
-        except Exception as e:
-            # Log the error but continue trying
-            print(f"Transcript fetch failed for {p}: {str(e)[:100]}")
-            continue
-    
-    # Last resort: try to get any available transcript using list_transcripts
+
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-        for transcript in transcript_list:
+        transcripts = YouTubeTranscriptApi.list_transcripts(vid)
+
+        # Native English first
+        for lang in ("en", "en-US", "en-GB"):
             try:
-                data = transcript.fetch()
-                txt = " ".join(d.get("text","") for d in data)
-                if txt.strip():
-                    return True, txt, f"Local API ({transcript.language_code})"
-            except Exception as e:
-                print(f"Failed to fetch {transcript.language_code}: {str(e)[:100]}")
+                t = transcripts.find_manually_created_transcript([lang]).fetch()
+                return True, " ".join(x.get("text","") for x in t), "Local API"
+            except Exception:
+                pass
+            try:
+                t = transcripts.find_generated_transcript([lang]).fetch()
+                return True, " ".join(x.get("text","") for x in t), "Local API"
+            except Exception:
+                pass
+
+        # Any language → translate to English if possible
+        for tr in transcripts:
+            try:
+                t = tr.translate('en').fetch()
+                return True, " ".join(x.get("text","") for x in t), "Local API (translated)"
+            except Exception:
                 continue
+
+        # Last resort: first available track as-is
+        for tr in transcripts:
+            try:
+                t = tr.fetch()
+                return True, " ".join(x.get("text","") for x in t), f"Local API ({tr.language_code})"
+            except Exception:
+                continue
+
+        return False, None, "No captions found on YouTube"
     except Exception as e:
-        print(f"List transcripts failed: {str(e)[:100]}")
-        
-    return False, None, f"No transcripts available for video {vid} (YouTube API temporarily unavailable)"
+        return False, None, f"Captions unavailable: {e}"
+
+def fetch_transcript_deepgram(video_url: str, timeout=60):
+    api = os.environ.get("DEEPGRAM_API_KEY")
+    if not api:
+        return False, None, "Deepgram not configured"
+
+    # 1) get an audio URL without downloading the file
+    try:
+        import yt_dlp
+        ydl_opts = {"skip_download": True, "quiet": True, "format": "bestaudio/best"}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            audio_url = next((f["url"] for f in info["formats"] if f.get("acodec") != "none"), None)
+        if not audio_url:
+            return False, None, "No audio URL"
+    except Exception as e:
+        return False, None, f"yt-dlp error: {e}"
+
+    # 2) send to Deepgram (sync)
+    try:
+        r = requests.post(
+            "https://api.deepgram.com/v1/listen?model=nova-2-general&smart_format=true&language=en",
+            headers={"Authorization": f"Token {api}", "Content-Type": "application/json"},
+            json={"url": audio_url},
+            timeout=timeout
+        )
+        if r.status_code != 200:
+            return False, None, f"Deepgram {r.status_code}: {r.text[:160]}"
+        d = r.json()
+
+        # flatten result
+        def flatten(d):
+            try:
+                alts = d["results"]["channels"][0]["alternatives"]
+                if alts and "paragraphs" in alts[0]:
+                    paras = alts[0]["paragraphs"]["paragraphs"]
+                    return " ".join(seg["text"] for p in paras for seg in p["sentences"]).strip()
+                return alts[0].get("transcript","").strip()
+            except Exception:
+                return ""
+        txt = flatten(d)
+        return (True, txt, "Deepgram") if txt else (False, None, "Deepgram returned empty text")
+    except Exception as e:
+        return False, None, f"Deepgram error: {e}"
 
 def safe_cut(s: str, limit: int) -> str:
     return s if len(s) <= limit else s[:limit]
@@ -232,6 +279,10 @@ def summarize():
     # 2) Fallback to local
     if not ok:
         ok, transcript, source = fetch_transcript_local(youtube_url)
+
+    # 3) Last resort: Deepgram STT
+    if not ok:
+        ok, transcript, source = fetch_transcript_deepgram(youtube_url)
 
     if not ok or not transcript:
         return jsonify(ok=False, error=source), 502

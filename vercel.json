@@ -8,6 +8,7 @@
   "routes": [
     { "src": "^/$", "dest": "api/main.py" },
     { "src": "^/health$", "dest": "api/main.py" },
+    { "src": "^/diag$", "dest": "api/main.py" },
     { "src": "^/test-transcript$", "dest": "api/main.py" },
     { "src": "^/summarize$", "dest": "api/main.py" },
     { "src": "^/favicon\\.(ico|png)$", "status": 204 },
