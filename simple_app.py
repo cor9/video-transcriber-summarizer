@@ -1,61 +1,55 @@
 #!/usr/bin/env python3
 """
 A simple, self-contained YouTube summarizer using Flask and the Gemini API.
+This version calls a dedicated MCP server for transcripts.
 """
 import os
 import time
 import random
-from flask import Flask, request, render_template_string
+import json
+import requests
+from flask import Flask, request, render_template_string, jsonify
 import google.generativeai as genai
-from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 
 # --- 1. SETUP ---
 app = Flask(__name__)
 
-def get_video_id(url):
-    """Extracts the YouTube video ID from a URL."""
-    if not url:
-        return None
-    
-    query = urlparse(url)
-    if "youtu.be" in query.hostname:
-        return query.path[1:]
-    if "youtube.com" in query.hostname:
-        if query.path == '/watch':
-            return parse_qs(query.query).get('v', [None])[0]
-        if query.path.startswith(('/embed/', '/v/')):
-            return query.path.split('/')[2]
-            
-    return None # Return None if no ID is found
+# --- MCP Server Client ---
+# Configuration for the dedicated MCP server
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-server-youtube-transcript-flax.vercel.app")
 
-def get_transcript_simple(video_id):
-    """Get transcript using YouTube's transcript API with retry logic"""
-    max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            # Add delay between attempts
-            if attempt > 0:
-                delay = random.uniform(1, 3)
-                time.sleep(delay)
+def get_transcript_from_mcp_server(video_url):
+    """
+    Calls the dedicated MCP transcript server to get the transcript.
+    """
+    if not MCP_SERVER_URL:
+        return {"success": False, "error": "MCP_SERVER_URL is not configured."}
+        
+    print(f"📞 Calling MCP Server at: {MCP_SERVER_URL} for URL: {video_url}")
+    try:
+        payload = {"video_url": video_url}
+        response = requests.post(
+            f"{MCP_SERVER_URL}/api/transcript",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                return {"success": True, "transcript": result.get("transcript")}
+            else:
+                return {"success": False, "error": result.get("error", "Unknown error from MCP server")}
+        else:
+            return {"success": False, "error": f"MCP server returned status {response.status_code}: {response.text}"}
             
-            # Get transcript
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            transcript_text = " ".join([item['text'] for item in transcript_list])
-            return transcript_text
-            
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise Exception(f"Could not get transcript: {str(e)}")
-            continue
-    
-    return None
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "error": f"Could not connect to MCP server: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
 
-# Configure the Gemini API
-# IMPORTANT: You must set this environment variable in your terminal
-# before running the script. Example:
-# export GEMINI_API_KEY='YOUR_API_KEY_HERE'
+# --- Gemini API Setup ---
 try:
     api_key = os.environ["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
@@ -85,7 +79,7 @@ HTML_FORM = """
 </head>
 <body>
     <h1>Simple YouTube Summarizer</h1>
-    <p style="color: #666; margin-bottom: 20px;">Gets transcripts directly from YouTube and summarizes with AI</p>
+    <p style="color: #666; margin-bottom: 20px;">This app now uses a dedicated MCP server to fetch transcripts.</p>
     <form action="/summarize" method="post">
         <label for="youtube_url">Enter YouTube Video URL:</label>
         <input type="url" id="youtube_url" name="youtube_url" required placeholder="https://www.youtube.com/watch?v=...">
@@ -135,33 +129,26 @@ def index():
 def summarize():
     youtube_url = request.form['youtube_url']
 
-    # --- Step 1: Get the transcript ---
-    try:
-        # Extract video ID from URL
-        video_id = get_video_id(youtube_url)
-        if not video_id:
-            return render_template_string(HTML_FORM, error="Invalid YouTube URL format")
-        
-        # Get transcript using YouTube's API
-        transcript_text = get_transcript_simple(video_id)
-        
-    except Exception as e:
-        # Handle errors
-        app.logger.error(f"Transcript error: {e}")
-        return render_template_string(HTML_FORM, error=f"Could not get transcript: {e}")
+    # --- Step 1: Get transcript from the MCP Server ---
+    # Call the function that contacts your dedicated transcript server.
+    transcript_response = get_transcript_from_mcp_server(youtube_url)
 
-    # --- Step 2: Get the summary ---
+    # Check if the call was successful. If not, show the error.
+    if not transcript_response["success"]:
+        error_message = transcript_response["error"]
+        return render_template_string(HTML_FORM, error=f"Could not get transcript: {error_message}")
+    
+    transcript_text = transcript_response["transcript"]
+
+    # --- Step 2: Get the summary from Gemini AI ---
     if not model:
         return render_template_string(HTML_FORM, error="AI Model is not configured. Did you set your API key?")
     
     try:
-        # Create a prompt for the AI
         prompt = f"Please provide a concise, easy-to-read, bullet-point summary of the following video transcript:\n\n---\n{transcript_text}\n---"
-        # Call the AI model
         response = model.generate_content(prompt)
         summary_text = response.text
     except Exception as e:
-        # Handle errors from the AI API
         return render_template_string(HTML_FORM, error=f"Could not generate summary: {e}")
 
     # Display the results
