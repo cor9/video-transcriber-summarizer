@@ -8,9 +8,23 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 import time
 import random
+import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+API_KEY = os.environ.get("MCP_API_KEY")
+
+@app.before_request
+def check_api_key():
+    # Allow health and favicon without a key
+    if request.path in ("/", "/favicon.ico", "/favicon.png"):
+        return None
+    if request.path.startswith("/api/"):
+        if not API_KEY:
+            return jsonify(error="Server misconfigured: MCP_API_KEY missing"), 500
+        if request.headers.get("x-api-key") != API_KEY:
+            return jsonify(error="Unauthorized"), 401
 
 def get_video_id(url):
     """Extract YouTube video ID from URL"""
@@ -66,21 +80,15 @@ def get_transcript():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/health', methods=['GET'])
+@app.route('/', methods=['GET'])
 def health():
     """Health check"""
-    return jsonify({"status": "healthy", "service": "MCP YouTube Transcript Server"})
+    return jsonify({"ok": True, "service": "MCP YouTube Transcript Server"})
 
-@app.route('/', methods=['GET'])
-def root():
-    """Root endpoint"""
-    return jsonify({
-        "service": "MCP YouTube Transcript Server",
-        "endpoints": {
-            "POST /api/transcript": "Get YouTube transcript",
-            "GET /health": "Health check"
-        }
-    })
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy", "service": "MCP YouTube Transcript Server"})
 
 if __name__ == '__main__':
     print("🚀 Starting MCP YouTube Transcript Server...")

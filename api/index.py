@@ -53,8 +53,15 @@ def get_video_id(url: str) -> str | None:
 def call_mcp_transcript(video_url: str, timeout=30):
     """HTTP wrapper around your MCP server (not the raw MCP protocol)."""
     payload = {"video_url": video_url}
+    headers = {"Accept": "application/json"}
+    
+    # Add API key if available
+    mcp_api_key = os.environ.get("MCP_API_KEY")
+    if mcp_api_key:
+        headers["x-api-key"] = mcp_api_key
+    
     try:
-        r = requests.post(f"{MCP_SERVER_URL}/api/transcript", json=payload, timeout=timeout)
+        r = requests.post(f"{MCP_SERVER_URL}/api/transcript", json=payload, timeout=timeout, headers=headers)
         if r.status_code == 200:
             data = r.json()
             if data.get("success") and data.get("transcript"):
@@ -204,10 +211,10 @@ def summarize():
     if not vid:
         return render_template_string(HTML_FORM.replace("{model}", GEMINI_MODEL), error="Invalid YouTube URL.")
 
-    # 1) Transcript (Local first → MCP fallback)
+    # 1) Transcript (Local first → MCP fallback with API key)
     ok, transcript, source = local_transcript(vid)
     if not ok:
-        # Try MCP server as fallback
+        # Try MCP server as fallback with API key authentication
         ok, transcript, source = call_mcp_transcript(youtube_url)
         if not ok:
             # brief jittered retry

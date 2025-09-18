@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "simple_mcp_server.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60
+    }
+  },
+  "routes": [
+    { "src": "^/$", "dest": "/simple_mcp_server.py" },
+    { "src": "^/api/transcript$", "dest": "/simple_mcp_server.py" },
+    { "src": "^/health$", "dest": "/simple_mcp_server.py" },
+    { "src": "^/favicon\\.(ico|png)$", "status": 204 },
+    { "src": "^/(robots\\.txt|sitemap\\.xml)$", "status": 204 }
+  ]
+}
