@@ -1,13 +1,13 @@
 {
   "functions": {
-    "api/index.py": {
+    "api/main.py": {
       "runtime": "python3.11",
       "maxDuration": 60
     }
   },
   "routes": [
-    { "src": "^/$", "dest": "api/index.py" },
-    { "src": "^/summarize$", "dest": "api/index.py" },
+    { "src": "^/$", "dest": "api/main.py" },
+    { "src": "^/summarize$", "dest": "api/main.py" },
     { "src": "^/favicon\\.(ico|png)$", "status": 204 },
     { "src": "^/(robots\\.txt|sitemap\\.xml)$", "status": 204 }
   ]
