@@ -10,6 +10,7 @@ import json
 import requests
 from flask import Flask, request, render_template_string, jsonify
 import google.generativeai as genai
+from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 
 # --- 1. SETUP ---
@@ -19,9 +20,62 @@ app = Flask(__name__)
 # Configuration for the dedicated MCP server
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "https://mcp-server-youtube-transcript-flax.vercel.app")
 
+def get_video_id(url):
+    """Extracts the YouTube video ID from a URL."""
+    if not url:
+        return None
+    
+    query = urlparse(url)
+    if "youtu.be" in query.hostname:
+        return query.path[1:]
+    if "youtube.com" in query.hostname:
+        if query.path == '/watch':
+            return parse_qs(query.query).get('v', [None])[0]
+        if query.path.startswith(('/embed/', '/v/')):
+            return query.path.split('/')[2]
+            
+    return None # Return None if no ID is found
+
+def get_transcript_simple(video_id):
+    """Get transcript using YouTube's transcript API with retry logic"""
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            # Add delay between attempts
+            if attempt > 0:
+                delay = random.uniform(1, 3)
+                time.sleep(delay)
+            
+            # Try multiple transcript sources
+            transcript_sources = [None, ['en'], ['en-US'], ['en-GB']]
+            
+            for source in transcript_sources:
+                try:
+                    if source:
+                        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=source)
+                    else:
+                        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                    
+                    transcript_text = " ".join([item['text'] for item in transcript_list])
+                    return transcript_text
+                    
+                except Exception as e:
+                    continue
+            
+            raise Exception("No transcripts available for this video")
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise Exception(f"Could not get transcript: {str(e)}")
+            continue
+    
+    return None
+
 def get_transcript_from_mcp_server(video_url):
     """
     Calls the dedicated MCP transcript server to get the transcript.
+    Falls back to local transcript fetching if MCP server is unavailable.
     """
     if not MCP_SERVER_URL:
         return {"success": False, "error": "MCP_SERVER_URL is not configured."}
@@ -38,7 +92,7 @@ def get_transcript_from_mcp_server(video_url):
         if response.status_code == 200:
             result = response.json()
             if result.get("success"):
-                return {"success": True, "transcript": result.get("transcript")}
+                return {"success": True, "transcript": result.get("transcript"), "source": "MCP Server"}
             else:
                 return {"success": False, "error": result.get("error", "Unknown error from MCP server")}
         else:
@@ -48,6 +102,29 @@ def get_transcript_from_mcp_server(video_url):
         return {"success": False, "error": f"Could not connect to MCP server: {str(e)}"}
     except Exception as e:
         return {"success": False, "error": f"An unexpected error occurred: {str(e)}"}
+
+def get_transcript_with_fallback(video_url):
+    """
+    Try MCP server first, fall back to local transcript fetching if unavailable.
+    """
+    # First try MCP server
+    mcp_result = get_transcript_from_mcp_server(video_url)
+    
+    if mcp_result["success"]:
+        return mcp_result
+    
+    # If MCP server fails, try local transcript fetching
+    print(f"🔄 MCP server unavailable, falling back to local transcript fetching...")
+    try:
+        video_id = get_video_id(video_url)
+        if not video_id:
+            return {"success": False, "error": "Invalid YouTube URL format"}
+        
+        transcript_text = get_transcript_simple(video_id)
+        return {"success": True, "transcript": transcript_text, "source": "Local API"}
+        
+    except Exception as e:
+        return {"success": False, "error": f"Local transcript fetching failed: {str(e)}"}
 
 # --- Gemini API Setup ---
 try:
@@ -79,7 +156,7 @@ HTML_FORM = """
 </head>
 <body>
     <h1>Simple YouTube Summarizer</h1>
-    <p style="color: #666; margin-bottom: 20px;">This app now uses a dedicated MCP server to fetch transcripts.</p>
+    <p style="color: #666; margin-bottom: 20px;">Uses MCP server for transcripts with automatic fallback to local API.</p>
     <form action="/summarize" method="post">
         <label for="youtube_url">Enter YouTube Video URL:</label>
         <input type="url" id="youtube_url" name="youtube_url" required placeholder="https://www.youtube.com/watch?v=...">
@@ -129,9 +206,8 @@ def index():
 def summarize():
     youtube_url = request.form['youtube_url']
 
-    # --- Step 1: Get transcript from the MCP Server ---
-    # Call the function that contacts your dedicated transcript server.
-    transcript_response = get_transcript_from_mcp_server(youtube_url)
+    # --- Step 1: Get transcript (try MCP server first, fallback to local) ---
+    transcript_response = get_transcript_with_fallback(youtube_url)
 
     # Check if the call was successful. If not, show the error.
     if not transcript_response["success"]:
@@ -139,6 +215,7 @@ def summarize():
         return render_template_string(HTML_FORM, error=f"Could not get transcript: {error_message}")
     
     transcript_text = transcript_response["transcript"]
+    transcript_source = transcript_response.get("source", "Unknown")
 
     # --- Step 2: Get the summary from Gemini AI ---
     if not model:
@@ -151,7 +228,7 @@ def summarize():
     except Exception as e:
         return render_template_string(HTML_FORM, error=f"Could not generate summary: {e}")
 
-    # Display the results
+    # Display the results with source information
     return render_template_string(HTML_RESULT, summary=summary_text, transcript=transcript_text)
 
 # --- 4. RUN THE APP ---
