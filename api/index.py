@@ -5,6 +5,7 @@ This version calls a dedicated MCP server for transcripts.
 """
 import os, time, random, json, math, requests
 from flask import Flask, request, render_template_string
+from flask_cors import CORS
 from urllib.parse import urlparse, parse_qs
 
 # --- Google Gen AI SDK (new) ---
@@ -21,6 +22,7 @@ except Exception:
 
 # --- 1. SETUP ---
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})  # simple, permissive CORS
 
 # Config
 MCP_SERVER_URL = os.environ.get(
