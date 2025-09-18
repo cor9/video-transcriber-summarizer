@@ -95,6 +95,26 @@
 **Decision:** Added XML parsing error detection and specific handling for YouTube blocking scenarios, created debug tool to diagnose caption availability, improved error messages to distinguish between actual disabled captions vs API access blocking, added UI guidance explaining CC vs API access differences
 **Status:** Success
 
+## 2025-01-17
+**Issue:** Deprecated Gemini SDK and token budget issues with long videos
+**Decision:** Upgraded from google.generativeai to new google-genai SDK, implemented chunked map-reduce summarization with defensive limits (MAX_TRANSCRIPT_CHARS=160k, CHUNK_CHARS=12k), switched to gemini-2.5-flash model, added configurable environment variables for model selection and limits
+**Status:** Success
+
+## 2025-01-17
+**Issue:** MCP server deployment not found causing transcript fetch failures
+**Decision:** Implemented local-first transcript fetching approach with MCP server as fallback, enhanced error handling with specific messages for different failure types (subtitles disabled, video unavailable, API errors), improved language probing with multiple variants
+**Status:** Success
+
+## 2025-01-17
+**Issue:** Vercel deployment conflicts and missing Flask-CORS dependency
+**Decision:** Removed conflicting vercel.json files, updated to proper functions format with python3.11 runtime, added Flask-Cors==4.0.1 dependency, initialized CORS with permissive origins, added bot protection routes (204 status for favicon/robots.txt/sitemap.xml)
+**Status:** Success
+
+## 2025-01-17
+**Issue:** Need Cursor MCP integration for development workflow
+**Decision:** Added .cursor/mcp.json configuration for jkawamoto/mcp-youtube-transcript server, installed uv package manager via pipx, created comprehensive setup guide with usage examples and troubleshooting, enabled direct transcript fetching in Cursor for development
+**Status:** Success
+
 ---
 # Imported Decisions & Learnings (from user)
 
