@@ -10,12 +10,12 @@ cat > vercel.json << EOF
 {
   "version": 2,
   "name": "mcp-youtube-transcript-server",
-  "builds": [
-    {
-      "src": "mcp_server.py",
-      "use": "@vercel/python"
+  "functions": {
+    "mcp_server.py": {
+      "runtime": "python3.9",
+      "maxDuration": 60
     }
-  ],
+  },
   "routes": [
     {
       "src": "/(.*)",

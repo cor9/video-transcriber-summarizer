@@ -1,19 +1,14 @@
-#!/usr/bin/env python3
-"""
-Minimal Hello World Flask app for Vercel deployment testing
-"""
-from flask import Flask, jsonify
-
+from flask import Flask, jsonify, request
 app = Flask(__name__)
 
-@app.route("/")
+@app.get("/")
 def health():
-    return jsonify({"ok": True, "message": "Hello World from Vercel!"})
+    return jsonify(ok=True, runtime="python3.11")
 
-@app.route("/summarize", methods=["POST"])
+@app.post("/summarize")
 def summarize():
-    return jsonify({"success": True, "message": "Summarize endpoint working"})
+    data = request.get_json(silent=True) or {}
+    return jsonify(success=True, echo=data)
 
-# Local dev only
 if __name__ == "__main__":
     app.run(debug=True, port=5001)
