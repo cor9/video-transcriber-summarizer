@@ -280,12 +280,17 @@ def summarize():
     if not ok:
         ok, transcript, source = fetch_transcript_local(youtube_url)
 
-    # 3) Last resort: Deepgram STT
+    # 3) Last resort: Deepgram STT (optional)
+    USE_STT = os.environ.get("USE_STT_FALLBACK", "false").lower() == "true"
     if not ok:
-        ok, transcript, source = fetch_transcript_deepgram(youtube_url)
+        if USE_STT:
+            ok, transcript, source = fetch_transcript_deepgram(youtube_url)
+        else:
+            return jsonify(ok=False, where="transcript", 
+                           error="No captions on YouTube and STT disabled"), 422
 
     if not ok or not transcript:
-        return jsonify(ok=False, error=source), 502
+        return jsonify(ok=False, where="transcript", error=source), 502
 
     transcript = safe_cut(transcript, MAX_TRANSCRIPT_CHARS)
 
