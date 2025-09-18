@@ -66,6 +66,42 @@ def home():
 def health():
     return jsonify(ok=True, runtime="python3.11")
 
+@app.get("/test-transcript")
+def test_transcript():
+    """Debug endpoint to test transcript fetching"""
+    test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    vid = get_video_id(test_url)
+    
+    result = {
+        "video_id": vid,
+        "has_yt_lib": HAS_YT,
+        "tests": []
+    }
+    
+    if HAS_YT and vid:
+        # Test different approaches
+        probes = [None, ['en'], ['es'], ['fr']]
+        for p in probes:
+            try:
+                lst = (YouTubeTranscriptApi.get_transcript(vid, languages=p) if p
+                       else YouTubeTranscriptApi.get_transcript(vid))
+                txt = " ".join(d.get("text","") for d in lst)
+                result["tests"].append({
+                    "lang": p or "auto",
+                    "success": True,
+                    "length": len(txt),
+                    "preview": txt[:100] + "..." if len(txt) > 100 else txt
+                })
+                break  # Stop on first success
+            except Exception as e:
+                result["tests"].append({
+                    "lang": p or "auto", 
+                    "success": False,
+                    "error": str(e)[:200]
+                })
+    
+    return jsonify(result)
+
 def get_video_id(url: str):
     if not url: return None
     q = urlparse(url); host = (q.hostname or "").lower() if q.hostname else ""
@@ -100,16 +136,38 @@ def fetch_transcript_local(video_url: str):
     vid = get_video_id(video_url)
     if not vid:
         return False, None, "Invalid YouTube URL"
-    probes = [None, ['en'], ['en-US'], ['en-GB']]
+    
+    # Try different approaches with better error handling
+    probes = [None, ['en'], ['es'], ['fr'], ['de'], ['it'], ['pt']]
+    
     for p in probes:
         try:
             lst = (YouTubeTranscriptApi.get_transcript(vid, languages=p) if p
                    else YouTubeTranscriptApi.get_transcript(vid))
             txt = " ".join(d.get("text","") for d in lst)
-            return True, txt, "Local API"
-        except Exception:
+            if txt.strip():  # Make sure we got actual content
+                return True, txt, f"Local API ({p or 'auto'})"
+        except Exception as e:
+            # Log the error but continue trying
+            print(f"Transcript fetch failed for {p}: {str(e)[:100]}")
             continue
-    return False, None, "No transcripts available"
+    
+    # Last resort: try to get any available transcript using list_transcripts
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+        for transcript in transcript_list:
+            try:
+                data = transcript.fetch()
+                txt = " ".join(d.get("text","") for d in data)
+                if txt.strip():
+                    return True, txt, f"Local API ({transcript.language_code})"
+            except Exception as e:
+                print(f"Failed to fetch {transcript.language_code}: {str(e)[:100]}")
+                continue
+    except Exception as e:
+        print(f"List transcripts failed: {str(e)[:100]}")
+        
+    return False, None, f"No transcripts available for video {vid}"
 
 def safe_cut(s: str, limit: int) -> str:
     return s if len(s) <= limit else s[:limit]
