@@ -25,7 +25,7 @@ app = Flask(__name__)
 # Config
 MCP_SERVER_URL = os.environ.get(
     "MCP_SERVER_URL",
-    "https://mcp-server-youtube-transcript-flax.vercel.app"
+    "https://video-transcriber-qmcpuy1e6-cor9s-projects.vercel.app"
 )
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")  # or gemini-2.5-pro
 GENAI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -65,21 +65,33 @@ def call_mcp_transcript(video_url: str, timeout=30):
 def local_transcript(video_id: str):
     """Fallback using youtube-transcript-api with language probing."""
     if not HAS_YT:
-        return False, None, "Local API unavailable"
+        return False, None, "Local API unavailable - youtube-transcript-api not installed"
+    
     probes = [None, ['en'], ['en-US'], ['en-GB']]
+    last_error = None
+    
     for probe in probes:
         try:
             lst = (YouTubeTranscriptApi.get_transcript(video_id, languages=probe) if probe
                    else YouTubeTranscriptApi.get_transcript(video_id))
             text = " ".join(item.get("text","") for item in lst)
-            return True, text, "Local API"
-        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as e:
-            # try next probe
+            if text.strip():  # Make sure we got actual content
+                return True, text, "Local API"
+        except TranscriptsDisabled:
+            last_error = "Subtitles are disabled for this video"
+            continue
+        except NoTranscriptFound:
+            last_error = "No transcripts found for this video"
+            continue
+        except VideoUnavailable:
+            last_error = "Video is unavailable or private"
             continue
         except Exception as e:
-            # transient? keep trying
+            last_error = f"Transcript API error: {str(e)}"
             time.sleep(random.uniform(0.5, 1.5))
-    return False, None, "No transcripts available"
+            continue
+    
+    return False, None, last_error or "No transcripts available"
 
 def safe_cut(s: str, limit: int) -> str:
     return s if len(s) <= limit else s[:limit]
@@ -190,15 +202,15 @@ def summarize():
     if not vid:
         return render_template_string(HTML_FORM.replace("{model}", GEMINI_MODEL), error="Invalid YouTube URL.")
 
-    # 1) Transcript (MCP → fallback)
-    ok, transcript, source = call_mcp_transcript(youtube_url)
+    # 1) Transcript (Local first → MCP fallback)
+    ok, transcript, source = local_transcript(vid)
     if not ok:
-        # brief jittered retry
-        time.sleep(random.uniform(0.4, 1.2))
+        # Try MCP server as fallback
         ok, transcript, source = call_mcp_transcript(youtube_url)
-
-    if not ok:
-        ok, transcript, source = local_transcript(vid)
+        if not ok:
+            # brief jittered retry
+            time.sleep(random.uniform(0.4, 1.2))
+            ok, transcript, source = call_mcp_transcript(youtube_url)
 
     if not ok or not transcript:
         return render_template_string(HTML_FORM.replace("{model}", GEMINI_MODEL), error=f"Could not get transcript: {source}")
