@@ -1,8 +1,11 @@
 {
   "version": 2,
-  "builds": [
-    { "src": "api/main.py", "use": "@vercel/python@3.9.0" }
-  ],
+  "functions": {
+    "api/main.py": {
+      "runtime": "python3.9",
+      "maxDuration": 60
+    }
+  },
   "routes": [
     { "src": "^/$", "dest": "api/main.py" },
     { "src": "^/summarize$", "dest": "api/main.py" },

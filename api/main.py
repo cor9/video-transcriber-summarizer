@@ -19,11 +19,11 @@ HTML_FORM = """<!doctype html>
 def home():                       # <-- show UI in browsers
     # If a program requests JSON explicitly, still return health JSON
     wants_json = "application/json" in (request.headers.get("accept",""))
-    return jsonify(ok=True, runtime="python3.11") if wants_json else render_template_string(HTML_FORM)
+    return jsonify(ok=True, runtime="python3.9") if wants_json else render_template_string(HTML_FORM)
 
 @app.get("/health")               # <-- keep a stable JSON health endpoint
 def health():
-    return jsonify(ok=True, runtime="python3.11")
+    return jsonify(ok=True, runtime="python3.9")
 
 @app.post("/summarize")
 def summarize():
