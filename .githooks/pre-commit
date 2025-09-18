@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -e
-if grep -R -E '"builds"\s*:|\bnow-|@vercel/(python|node|go|php)' vercel.json; then
-  echo "❌ Legacy Vercel config detected in vercel.json"; exit 1
+if grep -R -E '"builds"\s*:|"\s*use"\s*:\s*"@vercel/|now-' . --exclude-dir=.githooks; then
+  echo "❌ Legacy Vercel builders detected. Remove them before committing."
+  exit 1
 fi
 echo "✅ Vercel config clean"
