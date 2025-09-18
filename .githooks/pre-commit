@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -e
+if grep -R -E '"builds"\s*:|\bnow-|@vercel/(python|node|go|php)' vercel.json; then
+  echo "❌ Legacy Vercel config detected in vercel.json"; exit 1
+fi
+echo "✅ Vercel config clean"
